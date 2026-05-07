@@ -1,0 +1,772 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  REVIEWER
+  ANALYST
+}
+
+enum ProjectStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  BLOCKED
+}
+
+enum KnowledgeHealth {
+  STRONG
+  NEEDS_REVIEW
+  SPARSE
+  MISSING
+  OUTDATED
+}
+
+enum KnowledgeItemStatus {
+  DRAFT
+  APPROVED
+  RESTRICTED
+  ARCHIVED
+}
+
+enum OpportunityStatus {
+  NEW
+  ANALYZED
+  DRAFT_READY
+  AWAITING_REVIEW
+  APPROVED
+  POSTED_MANUALLY
+  REJECTED
+  SAVED_AS_INSIGHT
+  DO_NOT_REPLY
+}
+
+enum IntentLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RecommendedAction {
+  HELPFUL_ANSWER_ONLY
+  CLARIFYING_QUESTION
+  HELPFUL_WITH_SOFT_DISCLOSURE
+  PRODUCT_RECOMMENDATION_WITH_DISCLOSURE
+  SAVE_AS_MARKET_INSIGHT
+  MONITOR_FOR_FOLLOW_UP
+  DO_NOT_REPLY
+}
+
+enum ResponseType {
+  HELPFUL_ONLY
+  FOUNDER_STYLE
+  SHORT_CASUAL
+  DETAILED_PRACTICAL
+  CLARIFYING_QUESTION
+  SOFT_PRODUCT_MENTION
+  PRODUCT_RECOMMENDATION_WITH_DISCLOSURE
+}
+
+enum ProductMentionLevel {
+  LEVEL_0
+  LEVEL_1
+  LEVEL_2
+  LEVEL_3
+  LEVEL_4
+}
+
+enum SourceType {
+  MOCK
+  MANUAL
+  REDDIT
+}
+
+enum DiscoveryRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum CandidateType {
+  ORIGINAL_POST
+  TOP_COMMENT
+  RECENT_COMMENT
+  NESTED_REPLY
+  UNANSWERED_QUESTION
+  COMPETITOR_MENTION
+  TOOL_REQUEST
+  PAIN_POINT
+  IMPLEMENTATION_QUESTION
+  BUYING_INTENT
+  NEGATIVE_SENTIMENT
+  MARKET_INSIGHT_ONLY
+}
+
+enum CandidateStatus {
+  NEW
+  MAPPED
+  DELIBERATING
+  DELIBERATED
+  QUEUED_FOR_APPROVAL
+  SAFE_TO_AUTO_ENGAGE
+  AUTO_ENGAGED
+  SAVED_AS_INSIGHT
+  MONITOR_ONLY
+  BLOCKED
+  REJECTED
+}
+
+enum DeliberationStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  BLOCKED
+}
+
+enum FinalDecisionAction {
+  REPLY
+  HELPFUL_ONLY_REPLY
+  CLARIFYING_QUESTION
+  SOFT_PRODUCT_MENTION
+  PRODUCT_RECOMMENDATION_WITH_DISCLOSURE
+  SAVE_AS_MARKET_INSIGHT
+  MONITOR_ONLY
+  DO_NOT_ENGAGE
+}
+
+enum AutonomyStatus {
+  SAFE_TO_AUTO_ENGAGE
+  NEEDS_HUMAN_APPROVAL
+  MONITOR_ONLY
+  SAVE_AS_INSIGHT_ONLY
+  BLOCKED
+}
+
+enum AutonomousActionType {
+  AUTO_REPLY
+  QUEUE_FOR_APPROVAL
+  SAVE_AS_INSIGHT
+  MONITOR
+  BLOCK
+}
+
+enum AutonomousActionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+  BLOCKED
+  SIMULATED
+}
+
+enum DraftStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+  COPIED
+  POSTED_MANUALLY
+}
+
+enum GuardrailAction {
+  WARN
+  REQUIRE_EDIT
+  BLOCK_RESPONSE
+  RECOMMEND_HELPFUL_ONLY
+  RECOMMEND_SAVE_AS_INSIGHT
+  REQUIRE_DISCLOSURE
+  REMOVE_LINK
+  LOWER_PRODUCT_MENTION_LEVEL
+}
+
+enum OutcomeType {
+  POSTED_MANUALLY
+  REJECTED
+  SAVED_AS_INSIGHT
+  MONITORING
+  POSITIVE_REPLY
+  NEGATIVE_REPLY
+  REMOVED
+  REMOVED_COMMENT
+  MODERATOR_WARNING
+  MANUAL_REJECTION
+  USER_APPROVED_EDIT
+  AUTO_ENGAGEMENT_SUCCESS
+  AUTO_ENGAGEMENT_BLOCKED
+  AUTO_ENGAGEMENT_FAILURE
+}
+
+model User {
+  id             String             @id @default(cuid())
+  name           String?
+  email          String?            @unique
+  emailVerified  DateTime?
+  image          String?
+  role           UserRole           @default(ANALYST)
+  organizationId String?
+  organization   Organization?      @relation(fields: [organizationId], references: [id])
+  accounts       Account[]
+  sessions       Session[]
+  documents      UploadedDocument[]
+  activityLogs   ActivityLog[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Organization {
+  id           String        @id @default(cuid())
+  name         String
+  users        User[]
+  projects     Project[]
+  activityLogs ActivityLog[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Project {
+  id                   String                 @id @default(cuid())
+  organizationId       String?
+  organization         Organization?          @relation(fields: [organizationId], references: [id])
+  name                 String
+  productType          String
+  productDescription   String                 @db.Text
+  primaryObjective     String                 @db.Text
+  engagementGoal       String                 @db.Text
+  brandAccountName     String?
+  websiteUrl           String?
+  targetAudience       String                 @db.Text
+  defaultTone          String
+  productMentionPolicy String                 @db.Text
+  riskTolerance        RiskLevel              @default(MEDIUM)
+  status               ProjectStatus          @default(ACTIVE)
+  productKnowledge     ProductKnowledgeItem[]
+  marketKnowledge      MarketKnowledgeItem[]
+  communityRules       CommunityRule[]
+  signalSources        SignalSource[]
+  discoveryRuns        DiscoveryRun[]
+  discoveredItems      DiscoveredItem[]
+  conversationCandidates ConversationCandidate[]
+  deliberationRuns     DeliberationRun[]
+  candidateScores      CandidateScore[]
+  finalDecisions       FinalDecision[]
+  autonomyPolicies     AutonomyPolicy[]
+  autonomousActionLogs AutonomousActionLog[]
+  opportunities        Opportunity[]
+  marketInsights       MarketInsight[]
+  uploadedDocuments    UploadedDocument[]
+  knowledgeEmbeddings  KnowledgeEmbedding[]
+  activityLogs         ActivityLog[]
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+}
+
+model ProductKnowledgeItem {
+  id         String               @id @default(cuid())
+  projectId  String
+  project    Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category   String
+  title      String
+  content    String               @db.Text
+  source     String?
+  status     KnowledgeItemStatus  @default(DRAFT)
+  health     KnowledgeHealth      @default(SPARSE)
+  approved   Boolean              @default(false)
+  restricted Boolean              @default(false)
+  confidence Float                @default(0.7)
+  embeddings KnowledgeEmbedding[]
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+}
+
+model MarketKnowledgeItem {
+  id         String               @id @default(cuid())
+  projectId  String
+  project    Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category   String
+  title      String
+  content    String               @db.Text
+  source     String?
+  status     KnowledgeItemStatus  @default(DRAFT)
+  health     KnowledgeHealth      @default(SPARSE)
+  approved   Boolean              @default(false)
+  confidence Float                @default(0.7)
+  embeddings KnowledgeEmbedding[]
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+}
+
+model CommunityRule {
+  id                         String               @id @default(cuid())
+  projectId                  String
+  project                    Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  communityName              String
+  platform                   String
+  topic                      String
+  allowedContentTypes        String               @db.Text
+  selfPromotionPolicy        String               @db.Text
+  linkPolicy                 String               @db.Text
+  vendorParticipationRules   String               @db.Text
+  disclosureExpectations     String               @db.Text
+  tonePreference             String
+  riskLevel                  RiskLevel            @default(MEDIUM)
+  moderatorSensitivity       String
+  productMentionTolerance    String
+  previousSuccessfulComments String?              @db.Text
+  previousRemovals           String?              @db.Text
+  previousNegativeReactions  String?              @db.Text
+  recommendedReplyStyle      String               @db.Text
+  minimumAccountAgeOrKarma   String?
+  engagementFrequencyHistory String?
+  embeddings                 KnowledgeEmbedding[]
+  autonomyPolicies           AutonomyPolicy[]
+  createdAt                  DateTime             @default(now())
+  updatedAt                  DateTime             @updatedAt
+}
+
+model SignalSource {
+  id              String         @id @default(cuid())
+  projectId       String
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  platform        String
+  sourceType      SourceType     @default(MOCK)
+  communityName   String
+  sourceUrl       String?
+  keywords        String[]
+  competitorTerms String[]
+  painPointTerms  String[]
+  excludedTerms   String[]
+  scanFrequency   String
+  riskTolerance   RiskLevel      @default(MEDIUM)
+  isActive        Boolean        @default(true)
+  lastScannedAt   DateTime?
+  discoveryRuns   DiscoveryRun[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
+model DiscoveryRun {
+  id                String             @id @default(cuid())
+  projectId         String
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  signalSourceId    String
+  signalSource      SignalSource       @relation(fields: [signalSourceId], references: [id], onDelete: Cascade)
+  status            DiscoveryRunStatus @default(PENDING)
+  startedAt         DateTime
+  completedAt       DateTime?
+  itemsFound        Int                @default(0)
+  candidatesCreated Int                @default(0)
+  errors            String[]
+  discoveredItems   DiscoveredItem[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+}
+
+model DiscoveredItem {
+  id               String                  @id @default(cuid())
+  projectId        String
+  project          Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  discoveryRunId   String
+  discoveryRun     DiscoveryRun            @relation(fields: [discoveryRunId], references: [id], onDelete: Cascade)
+  platform         String
+  community        String
+  sourceType       SourceType              @default(MOCK)
+  externalId       String
+  parentExternalId String?
+  authorHandle     String
+  title            String
+  body             String                  @db.Text
+  url              String
+  score            Int?
+  replyCount       Int?
+  publishedAt      DateTime
+  rawJson          Json
+  candidates       ConversationCandidate[]
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+}
+
+model Opportunity {
+  id                    String              @id @default(cuid())
+  projectId             String
+  project               Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  platform              String
+  community             String
+  threadTitle           String
+  threadUrl             String?
+  sourceText            String              @db.Text
+  conversationSummary   String              @db.Text
+  userProblem           String              @db.Text
+  painPoint             String
+  audienceMatch         String              @db.Text
+  productFitExplanation String              @db.Text
+  intentLevel           IntentLevel         @default(MEDIUM)
+  riskLevel             RiskLevel           @default(MEDIUM)
+  recommendedAction     RecommendedAction
+  responseType          ResponseType
+  productMentionLevel   ProductMentionLevel @default(LEVEL_0)
+  reasoning             String              @db.Text
+  status                OpportunityStatus   @default(NEW)
+  scores                OpportunityScore?
+  responseDrafts        ResponseDraft[]
+  guardrailChecks       GuardrailCheck[]
+  marketInsights        MarketInsight[]
+  engagementOutcomes    EngagementOutcome[]
+  conversationCandidates ConversationCandidate[]
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+}
+
+model ConversationCandidate {
+  id                       String                 @id @default(cuid())
+  projectId                String
+  project                  Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  opportunityId            String?
+  opportunity              Opportunity?           @relation(fields: [opportunityId], references: [id])
+  discoveredItemId         String?
+  discoveredItem           DiscoveredItem?         @relation(fields: [discoveredItemId], references: [id])
+  platform                 String
+  community                String
+  sourceType               SourceType             @default(MOCK)
+  externalId               String
+  parentExternalId         String?
+  authorHandle             String
+  title                    String
+  body                     String                 @db.Text
+  url                      String
+  candidateType            CandidateType
+  detectedIntent           String
+  detectedPainPoint        String
+  competitorMentioned      String?
+  productCategoryMentioned String?
+  candidateSummary         String                 @db.Text
+  initialRelevanceScore    Int
+  initialIntentScore       Int
+  initialRiskScore         Int
+  status                   CandidateStatus        @default(NEW)
+  whyWorthAnalyzing        String                 @db.Text
+  recommendedNextStep      String
+  deliberationRuns         DeliberationRun[]
+  candidateScores          CandidateScore[]
+  finalDecisions           FinalDecision[]
+  responseDrafts           ResponseDraft[]
+  marketInsights           MarketInsight[]
+  autonomousActionLogs     AutonomousActionLog[]
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+}
+
+model OpportunityScore {
+  id                      String      @id @default(cuid())
+  opportunityId           String      @unique
+  opportunity             Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  relevanceScore          Int
+  intentScore             Int
+  productFitScore         Int
+  engagementValueScore    Int
+  promotionRiskScore      Int
+  communityRiskScore      Int
+  accountSafetyScore      Int
+  responseConfidenceScore Int
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+}
+
+model ResponseDraft {
+  id                  String              @id @default(cuid())
+  opportunityId       String
+  opportunity         Opportunity         @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  candidateId         String?
+  candidate           ConversationCandidate? @relation(fields: [candidateId], references: [id])
+  deliberationRunId   String?
+  deliberationRun     DeliberationRun?    @relation(fields: [deliberationRunId], references: [id])
+  finalDecisionId     String?
+  finalDecision       FinalDecision?      @relation(fields: [finalDecisionId], references: [id])
+  responseText        String              @db.Text
+  responseType        ResponseType
+  productMentionLevel ProductMentionLevel @default(LEVEL_0)
+  disclosureIncluded  Boolean             @default(false)
+  riskLevel           RiskLevel           @default(MEDIUM)
+  reasoning           String              @db.Text
+  status              DraftStatus         @default(DRAFT)
+  editedByUser        Boolean             @default(false)
+  guardrailChecks     GuardrailCheck[]
+  engagementOutcomes  EngagementOutcome[]
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+}
+
+model GuardrailCheck {
+  id              String          @id @default(cuid())
+  opportunityId   String
+  opportunity     Opportunity     @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  responseDraftId String?
+  responseDraft   ResponseDraft?  @relation(fields: [responseDraftId], references: [id])
+  checkType       String
+  description     String          @db.Text
+  severity        RiskLevel       @default(MEDIUM)
+  action          GuardrailAction
+  passed          Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+}
+
+model MarketInsight {
+  id            String       @id @default(cuid())
+  projectId     String
+  project       Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+  candidateId   String?
+  candidate     ConversationCandidate? @relation(fields: [candidateId], references: [id])
+  deliberationRunId String?
+  deliberationRun   DeliberationRun? @relation(fields: [deliberationRunId], references: [id])
+  category      String
+  title         String
+  insight       String       @db.Text
+  source        String
+  confidence    Float        @default(0.7)
+  approved      Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model EngagementOutcome {
+  id              String         @id @default(cuid())
+  opportunityId   String
+  opportunity     Opportunity    @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  responseDraftId String?
+  responseDraft   ResponseDraft? @relation(fields: [responseDraftId], references: [id])
+  candidateId     String?
+  autonomousActionLogId String?
+  outcomeType     OutcomeType
+  notes           String?        @db.Text
+  postedUrl       String?
+  sentiment       String?
+  createdAt       DateTime       @default(now())
+}
+
+model DeliberationRun {
+  id                    String                    @id @default(cuid())
+  projectId             String
+  project               Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  candidateId           String
+  candidate             ConversationCandidate      @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  status                DeliberationStatus        @default(PENDING)
+  finalDecision         FinalDecisionAction       @default(DO_NOT_ENGAGE)
+  finalConfidence       Int
+  autonomyStatus        AutonomyStatus            @default(NEEDS_HUMAN_APPROVAL)
+  agentResults          DeliberationAgentResult[]
+  candidateScores       CandidateScore[]
+  finalDecisions        FinalDecision[]
+  responseDrafts        ResponseDraft[]
+  marketInsights        MarketInsight[]
+  autonomousActionLogs  AutonomousActionLog[]
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+}
+
+model DeliberationAgentResult {
+  id                String          @id @default(cuid())
+  deliberationRunId String
+  deliberationRun   DeliberationRun @relation(fields: [deliberationRunId], references: [id], onDelete: Cascade)
+  agentName         String
+  recommendation    String
+  score             Int
+  argumentFor       String          @db.Text
+  argumentAgainst   String          @db.Text
+  riskFlags         String[]
+  reasoning         String          @db.Text
+  createdAt         DateTime        @default(now())
+}
+
+model CandidateScore {
+  id                       String                 @id @default(cuid())
+  candidateId              String
+  candidate                ConversationCandidate  @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  deliberationRunId        String
+  deliberationRun          DeliberationRun        @relation(fields: [deliberationRunId], references: [id], onDelete: Cascade)
+  projectId                String
+  project                  Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  relevanceScore           Int
+  intentScore              Int
+  productFitScore          Int
+  engagementValueScore     Int
+  promotionRiskScore       Int
+  communityRiskScore       Int
+  accountSafetyScore       Int
+  responseConfidenceScore  Int
+  skepticObjectionStrength Int
+  marketInsightValueScore  Int
+  createdAt                DateTime               @default(now())
+}
+
+model FinalDecision {
+  id                    String                    @id @default(cuid())
+  deliberationRunId     String
+  deliberationRun       DeliberationRun           @relation(fields: [deliberationRunId], references: [id], onDelete: Cascade)
+  candidateId           String
+  candidate             ConversationCandidate      @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  projectId             String
+  project               Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  selectedAction        FinalDecisionAction
+  selectedResponseType  ResponseType
+  productMentionLevel   ProductMentionLevel       @default(LEVEL_0)
+  requiresDisclosure    Boolean                   @default(false)
+  autoEngageAllowed     Boolean                   @default(false)
+  humanApprovalRequired Boolean                   @default(true)
+  finalReasoning        String                    @db.Text
+  approvedDraft         String                    @db.Text
+  blockedReason         String?                   @db.Text
+  policyResult          String                    @db.Text
+  responseDrafts        ResponseDraft[]
+  autonomousActionLogs  AutonomousActionLog[]
+  createdAt             DateTime                  @default(now())
+}
+
+model AutonomyPolicy {
+  id                            String                @id @default(cuid())
+  projectId                     String
+  project                       Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  communityRuleId               String?
+  communityRule                 CommunityRule?        @relation(fields: [communityRuleId], references: [id])
+  name                          String
+  allowAutoEngage               Boolean               @default(false)
+  maxCommentsPerDay             Int                   @default(3)
+  maxCommentsPerCommunityPerDay Int                   @default(1)
+  maxProductMentionsPerWeek     Int                   @default(1)
+  allowedProductMentionLevels   ProductMentionLevel[]
+  allowLinks                    Boolean               @default(false)
+  requireDisclosure             Boolean               @default(true)
+  minRelevanceScore             Int                   @default(85)
+  minIntentScore                Int                   @default(75)
+  minProductFitScore            Int                   @default(75)
+  minEngagementValueScore       Int                   @default(70)
+  maxPromotionRiskScore         Int                   @default(30)
+  maxCommunityRiskScore         Int                   @default(35)
+  minAccountSafetyScore         Int                   @default(80)
+  maxSkepticObjectionStrength   Int                   @default(40)
+  allowedCandidateTypes         CandidateType[]
+  blockedCandidateTypes         CandidateType[]
+  isActive                      Boolean               @default(true)
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+}
+
+model AutonomousActionLog {
+  id                String                  @id @default(cuid())
+  projectId         String
+  project           Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  candidateId       String
+  candidate         ConversationCandidate    @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  deliberationRunId String
+  deliberationRun   DeliberationRun         @relation(fields: [deliberationRunId], references: [id], onDelete: Cascade)
+  finalDecisionId   String
+  finalDecision     FinalDecision           @relation(fields: [finalDecisionId], references: [id], onDelete: Cascade)
+  actionType        AutonomousActionType
+  actionStatus      AutonomousActionStatus  @default(PENDING)
+  platform          String
+  community         String
+  responseText      String                  @db.Text
+  policySnapshot    Json
+  reason            String                  @db.Text
+  postedUrl         String?
+  errorMessage      String?                 @db.Text
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+}
+
+model UploadedDocument {
+  id            String               @id @default(cuid())
+  projectId     String
+  project       Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedById  String?
+  uploadedBy    User?                @relation(fields: [uploadedById], references: [id])
+  fileName      String
+  fileType      String
+  fileSize      Int?
+  sourceUrl     String?
+  status        String               @default("uploaded")
+  extractedText String?              @db.Text
+  embeddings    KnowledgeEmbedding[]
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+}
+
+model KnowledgeEmbedding {
+  id                     String                 @id @default(cuid())
+  projectId              String
+  project                Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  productKnowledgeItemId String?
+  productKnowledgeItem   ProductKnowledgeItem?  @relation(fields: [productKnowledgeItemId], references: [id])
+  marketKnowledgeItemId  String?
+  marketKnowledgeItem    MarketKnowledgeItem?   @relation(fields: [marketKnowledgeItemId], references: [id])
+  communityRuleId        String?
+  communityRule          CommunityRule?         @relation(fields: [communityRuleId], references: [id])
+  uploadedDocumentId     String?
+  uploadedDocument       UploadedDocument?      @relation(fields: [uploadedDocumentId], references: [id])
+  contentHash            String
+  chunkText              String                 @db.Text
+  embedding              Unsupported("vector")?
+  createdAt              DateTime               @default(now())
+}
+
+model ActivityLog {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  projectId      String?
+  project        Project?      @relation(fields: [projectId], references: [id])
+  userId         String?
+  user           User?         @relation(fields: [userId], references: [id])
+  entityType     String
+  entityId       String?
+  action         String
+  message        String        @db.Text
+  metadata       Json?
+  createdAt      DateTime      @default(now())
+}
