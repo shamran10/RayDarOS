@@ -240,6 +240,16 @@ Main files touched:
 - `.env`
 - `README.md`
 
+### 2026-06-10 Figma to Flutter App Initialization
+
+- Initialized a new Flutter project named `figma_to_flutter_app`.
+- Set up a strict Clean Architecture directory structure in `lib/`: `presentation` (screens, widgets, theme), `domain` (models, repositories), and `data` (datasources, repositories).
+
+Main files touched:
+
+- `figma_to_flutter_app/`
+- `README.md`
+
 ## Notes
 
 This repository is private and currently represents an MVP. For visual design guidance, see `DESIGN.md`.
