@@ -240,14 +240,13 @@ Main files touched:
 - `.env`
 - `README.md`
 
-### 2026-06-10 Figma to Flutter App Initialization
+### 2026-07-24 Unused Flutter Scaffold Removal
 
-- Initialized a new Flutter project named `figma_to_flutter_app`.
-- Set up a strict Clean Architecture directory structure in `lib/`: `presentation` (screens, widgets, theme), `domain` (models, repositories), and `data` (datasources, repositories).
+- Removed the standalone Flutter starter scaffold after confirming it had no Next.js imports, scripts, CI/CD workflows, generated integrations, submodules, symlinks, or ReydarOS-specific assets.
+- The repository now contains only the active Next.js ReydarOS application; its routes and user-visible behavior are unchanged.
 
 Main files touched:
 
-- `figma_to_flutter_app/`
 - `README.md`
 
 ## Notes
