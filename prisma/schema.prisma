@@ -390,6 +390,8 @@ model SignalSource {
   discoveryRuns   DiscoveryRun[]
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
+
+  @@index([projectId, isActive])
 }
 
 model DiscoveryRun {
@@ -398,6 +400,7 @@ model DiscoveryRun {
   project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   signalSourceId    String
   signalSource      SignalSource       @relation(fields: [signalSourceId], references: [id], onDelete: Cascade)
+  providerType      SourceType         @default(MOCK)
   status            DiscoveryRunStatus @default(PENDING)
   startedAt         DateTime
   completedAt       DateTime?
@@ -407,6 +410,9 @@ model DiscoveryRun {
   discoveredItems   DiscoveredItem[]
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
+
+  @@index([projectId, startedAt])
+  @@index([signalSourceId, startedAt])
 }
 
 model DiscoveredItem {
@@ -431,6 +437,9 @@ model DiscoveredItem {
   candidates       ConversationCandidate[]
   createdAt        DateTime                @default(now())
   updatedAt        DateTime                @updatedAt
+
+  @@unique([projectId, platform, sourceType, externalId])
+  @@index([projectId, discoveryRunId])
 }
 
 model Opportunity {
@@ -501,6 +510,9 @@ model ConversationCandidate {
   autonomousActionLogs     AutonomousActionLog[]
   createdAt                DateTime               @default(now())
   updatedAt                DateTime               @updatedAt
+
+  @@unique([projectId, discoveredItemId, candidateType])
+  @@index([projectId, status])
 }
 
 model OpportunityScore {

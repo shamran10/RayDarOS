@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { setGlobalTheme } from "@atlaskit/tokens";
+import { DiscoveryProvider } from "@/lib/discovery/context";
 import { StoreProvider } from "@/lib/store";
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -14,5 +15,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  return <StoreProvider>{children}</StoreProvider>;
+  return (
+    <StoreProvider>
+      <DiscoveryProvider>{children}</DiscoveryProvider>
+    </StoreProvider>
+  );
 }

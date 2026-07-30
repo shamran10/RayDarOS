@@ -414,6 +414,7 @@ export const initialState: ReydarState = {
       id: "run-the925-startups-001",
       projectId: "project-the925",
       signalSourceId: "source-the925-startups",
+      providerType: "mock",
       status: "completed",
       startedAt: now,
       completedAt: now,
