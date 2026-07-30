@@ -176,7 +176,7 @@ export function SignalDiscoveryScreen() {
           </SectionMessage>
         ) : null}
         <Banner appearance="warning">
-          Phase 2 stops after candidate mapping. Deliberation, drafting, autonomy, and posting remain local and are not run by source scans.
+          Source scans stop after candidate mapping. Deliberation starts explicitly from Candidate Map; drafting, autonomy, and posting are not run by source scans.
         </Banner>
       </Box>
 

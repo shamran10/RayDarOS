@@ -149,7 +149,9 @@ export function runCandidateDeliberation({
   productKnowledge,
   marketKnowledge,
   communityRules,
-  autonomyPolicies
+  autonomyPolicies,
+  runId,
+  startedAt
 }: {
   candidate: ConversationCandidate;
   project: Project;
@@ -157,6 +159,8 @@ export function runCandidateDeliberation({
   marketKnowledge: KnowledgeItem[];
   communityRules: CommunityRule[];
   autonomyPolicies: AutonomyPolicy[];
+  runId?: string;
+  startedAt?: string;
 }): {
   run: DeliberationRun;
   agentResults: DeliberationAgentResult[];
@@ -164,8 +168,8 @@ export function runCandidateDeliberation({
   finalDecision: FinalDecision;
   blockingReasons: string[];
 } {
-  const now = new Date().toISOString();
-  const deliberationRunId = makeId("deliberation");
+  const now = startedAt ?? new Date().toISOString();
+  const deliberationRunId = runId ?? makeId("deliberation");
   const matchingRule = communityRules.find((rule) => lower(rule.communityName) === lower(candidate.community));
   const policy = findPolicyForCandidate({ policies: autonomyPolicies, project, communityRuleId: matchingRule?.id });
   const scoreValues = inferScores({ candidate, project, productKnowledge, marketKnowledge, communityRule: matchingRule });

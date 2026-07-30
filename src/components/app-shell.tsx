@@ -11,6 +11,7 @@ import LockIcon from "@atlaskit/icon/core/lock-locked";
 import ChartIcon from "@atlaskit/icon/core/chart-bar";
 import SettingsIcon from "@atlaskit/icon/core/settings";
 import TargetIcon from "@atlaskit/icon/core/target";
+import { useDeliberation } from "@/lib/deliberation/context";
 import { useReydar } from "@/lib/store";
 
 const navItems = [
@@ -29,11 +30,16 @@ const primaryMobileHrefs = new Set(["/projects", "/signal-discovery", "/opportun
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { state, activeProject } = useReydar();
-  const highPriority = state.opportunities.filter(
-    (opportunity) => opportunity.scores.intentScore >= 75 && opportunity.riskLevel !== "high"
+  const { activeProject } = useReydar();
+  const { opportunities } = useDeliberation();
+  const highPriority = opportunities.filter(
+    ({ opportunity }) =>
+      (opportunity.scores?.intentScore ?? 0) >= 75 &&
+      opportunity.riskLevel !== "high"
   ).length;
-  const activeProjectOpportunities = state.opportunities.filter((item) => item.projectId === activeProject.id).length;
+  const activeProjectOpportunities = opportunities.filter(
+    ({ opportunity }) => opportunity.projectId === activeProject.id
+  ).length;
   const activeProjectHref = activeProject.id ? `/projects/${activeProject.id}` : "/projects";
   const mobilePrimaryItems = navItems.filter((item) => primaryMobileHrefs.has(item.href));
   const mobileSecondaryItems = navItems.filter((item) => !primaryMobileHrefs.has(item.href));
