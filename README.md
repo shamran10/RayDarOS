@@ -23,23 +23,25 @@ For each meaningful feature change, add a dated `Change Log` entry with a short 
 The default ReydarOS flow is:
 
 1. `Projects` define the product, audience, risk tolerance, knowledge, and community rules.
-2. `Autonomous Pipeline` scans configured signal sources through provider adapters. The first production adapter is the Reddit API provider; the demo adapter remains available for local testing.
-3. The pipeline maps discovered items into candidate engagement points.
-4. DARM deliberation scores each candidate, creates agent reasoning, and produces a final decision.
+2. `Autonomous Pipeline` persists configured signal sources and scans them through mock, manual, or existing Reddit provider adapters.
+3. Each database-backed discovery run normalizes and deduplicates discovered items, then deterministically maps them into candidate engagement points.
+4. DARM deliberation scores each candidate, creates agent reasoning, and produces a final decision; this and later stages remain on the local MVP boundary until Phase 3.
 5. Autonomy policies and guardrails decide whether the item can be auto-cleared, blocked, saved as insight, monitored, or sent to review.
 6. `Review Inbox` shows approval-gated exceptions and high-value items needing human attention.
 7. `Review Studio` lets the operator edit, approve, reject, or save learning from drafts.
 8. `Audit Log` preserves traceability from source signal to candidate, deliberation, final decision, policy snapshot, and action state.
 
-Projects, Product Knowledge, Market Knowledge, and Community Rules now use a typed server-side Project Brain service backed by Prisma/PostgreSQL. The browser never receives Prisma or organization ownership fields. The remaining MVP workflow modules continue to use React Context and browser `localStorage` temporarily; their local state is intentionally kept separate from the four database-backed Project Brain collections.
+Projects, Product Knowledge, Market Knowledge, Community Rules, Signal Sources, Discovery Runs, Discovered Items, and Conversation Candidates use typed server-side services backed by Prisma/PostgreSQL. Workspace ownership is selected and enforced on the server. These collections are explicitly excluded from browser `localStorage`; legacy local records are not imported or mapped to database project IDs. Deliberation, scores, decisions, opportunities, drafts, autonomy, analytics, action logs, and memory remain local MVP state.
 
 Manual screens are no longer part of the default operating loop. They remain available only as admin/debug fallbacks from Settings.
 
 ## Features
 
-- Autonomous source scanning with configurable project-specific signal sources
+- Database-backed source CRUD and lifecycle-tracked scans with project ownership enforcement
 - Reddit API discovery provider using server-side OAuth credentials and read-only subreddit listing/search ingestion
-- Candidate mapping from discovered conversations into possible engagement points
+- Mock and manual discovery providers for deterministic local verification
+- Normalized, deduplicated discovered items and deterministic database-backed candidate mapping
+- Explicit discovery loading, empty, validation, failure, and retry states
 - DARM deliberation with multi-agent reasoning, scores, final decision, and policy result
 - Autonomy controls for thresholds, mention levels, links, disclosure, cadence, and community risk
 - Guardrails for promotion risk, community norms, product mention levels, links, and account safety
@@ -99,7 +101,7 @@ For Reddit discovery, create a Reddit developer app and set:
 - `REDDIT_USER_AGENT`
 - `REDDIT_SCAN_LIMIT`
 
-The Reddit provider is read-only. It fetches subreddit posts through the official API, then routes returned items into candidate mapping, DARM deliberation, policy checks, drafts, review exceptions, and audit logs. Do not use Reddit content for model training, and review Reddit's Developer Terms/Data API Terms before any commercial deployment or write/posting integration.
+The Reddit provider is read-only. It fetches subreddit posts through the official API, then persists normalized discovered items and deterministic candidate mappings. Missing credentials fail and record only the attempted Reddit run; mock/manual discovery and the rest of the application remain available. Deliberation, policy checks, drafts, and posting are not part of Phase 2. Do not use Reddit content for model training, and review Reddit's Developer Terms/Data API Terms before any commercial deployment or write/posting integration.
 
 Generate the Prisma client:
 
@@ -169,7 +171,9 @@ DESIGN.md         Visual design system notes
 - `/projects/[projectId]/product-knowledge` - project product knowledge
 - `/projects/[projectId]/market-knowledge` - project market knowledge
 - `/projects/[projectId]/community-rules` - project community rules
-- `/signal-discovery` - autonomous pipeline
+- `/signal-discovery` - database-backed signal sources and discovery-run history
+- `/signal-monitor` - database-backed one-off manual discovery intake
+- `/candidates` - database-backed candidate mapping inspection
 - `/opportunities` - review inbox
 - `/response-studio` - review studio
 - `/autonomy-policies` - autonomy controls
@@ -191,17 +195,45 @@ Project Brain API routes:
 - `GET/POST /api/project-brain/projects/[projectId]/community-rules` - list and create community rules
 - `GET/PATCH/DELETE /api/project-brain/projects/[projectId]/community-rules/[ruleId]` - read, update, or delete owned community rules
 
+Discovery API routes:
+
+- `GET /api/discovery` - load the workspace discovery snapshot
+- `GET/POST /api/discovery/projects/[projectId]/sources` - list and create signal sources for an owned project
+- `GET/PATCH/DELETE /api/discovery/projects/[projectId]/sources/[sourceId]` - manage an owned source; deletion is blocked when run history exists
+- `POST /api/discovery/projects/[projectId]/sources/[sourceId]/runs` - run the source provider and persist its lifecycle, items, and candidate mappings
+- `POST /api/discovery/projects/[projectId]/manual` - persist a manual run, item, and deterministic candidate mapping
+- `POST /api/discovery/reddit` - legacy read-only Reddit provider route; database-backed source scans invoke the same provider server-side
+
 ## Admin and Debug Fallbacks
 
 These routes are intentionally demoted from the primary navigation. They should be used for recovery, inspection, provider testing, or debugging older records.
 
-- `/signal-monitor` - one-off manual intake fallback
-- `/candidates` - candidate map debug
+- `/signal-monitor` - one-off manual intake into persisted discovery and candidate mapping
+- `/candidates` - persisted candidate map inspection before Phase 3 deliberation
 - `/deliberation` - deliberation debug
 - `/autonomy-queue` - legacy approval queue
 - `/guardrails` - guardrail results
 
 ## Change Log
+
+### 2026-07-30 Phase 2 Discovery and Candidate Persistence
+
+- Moved Signal Sources, Discovery Runs, Discovered Items, and Conversation Candidates to typed Prisma/PostgreSQL services and App Router APIs.
+- Added workspace-scoped source CRUD, provider lifecycle tracking, mock/manual/Reddit scan handling, stable-key deduplication, and deterministic candidate mapping without OpenAI or Opportunity persistence.
+- Added a normal migration for run provider snapshots and database-enforced discovery/candidate uniqueness, plus explicit loading, failure, retry, and legacy-localStorage boundaries across Autonomous Pipeline, Manual Intake, and Candidates.
+- Failed Reddit runs remain `FAILED`, preserve their error, and do not update the source's last successful scan timestamp.
+
+Main files touched:
+
+- `prisma/schema.prisma`
+- `prisma/migrations/20260730000000_phase2_discovery_persistence/migration.sql`
+- `src/lib/discovery/`
+- `src/app/api/discovery/`
+- `src/lib/store.tsx`
+- `src/screens/signal-discovery-screen.tsx`
+- `src/screens/signal-monitor-screen.tsx`
+- `src/screens/candidate-map-screen.tsx`
+- `README.md`
 
 ### 2026-07-30 Remaining Project Brain Dialog Repair
 

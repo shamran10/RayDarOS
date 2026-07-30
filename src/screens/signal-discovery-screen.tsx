@@ -6,16 +6,20 @@ import Button, { LoadingButton } from "@atlaskit/button";
 import DynamicTable from "@atlaskit/dynamic-table";
 import EmptyState from "@atlaskit/empty-state";
 import Select from "@/components/apple-select";
+import SectionMessage from "@atlaskit/section-message";
 import TextArea from "@atlaskit/textarea";
 import Textfield from "@atlaskit/textfield";
 import { Box, Inline, Stack } from "@atlaskit/primitives";
 import { AppDialog } from "@/components/app-dialog";
+import { DiscoveryLoadState } from "@/components/discovery-load-state";
 import { Field } from "@/components/field";
 import { PageHeading } from "@/components/page-heading";
 import { SectionPanel } from "@/components/section-panel";
 import { RiskLozenge } from "@/components/status-lozenge";
+import type { SignalSourceCreateInput } from "@/lib/discovery/contracts";
+import { useDiscovery } from "@/lib/discovery/context";
 import { useReydar } from "@/lib/store";
-import type { RiskLevel, SourceType } from "@/lib/types";
+import type { RiskLevel } from "@/lib/types";
 
 const splitLines = (value: string) =>
   value
@@ -24,12 +28,25 @@ const splitLines = (value: string) =>
     .filter(Boolean);
 
 export function SignalDiscoveryScreen() {
-  const { activeProject, state, createSignalSource, runSignalDiscovery } = useReydar();
+  const { activeProject } = useReydar();
+  const {
+    snapshot,
+    status,
+    error,
+    retry,
+    createSource,
+    updateSource,
+    runSource: runPersistedSource
+  } = useDiscovery();
   const [isOpen, setIsOpen] = useState(false);
   const [runningSourceId, setRunningSourceId] = useState<string | null>(null);
+  const [updatingSourceId, setUpdatingSourceId] = useState<string | null>(null);
+  const [isSavingSource, setIsSavingSource] = useState(false);
+  const [operationError, setOperationError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
   const [form, setForm] = useState({
     platform: "Reddit",
-    sourceType: "mock" as SourceType,
+    sourceType: "mock" as SignalSourceCreateInput["sourceType"],
     communityName: "r/startups",
     sourceUrl: "https://reddit.com/r/startups",
     keywords: "workflow\napprovals\nonboarding",
@@ -40,18 +57,24 @@ export function SignalDiscoveryScreen() {
     riskTolerance: "medium" as RiskLevel,
     isActive: true
   });
-  const sources = state.signalSources.filter((source) => source.projectId === activeProject.id);
-  const runs = state.discoveryRuns.filter((run) => run.projectId === activeProject.id);
+  const updateForm = <Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) => {
+    setForm((current) => ({ ...current, [key]: value }));
+  };
+  const sources = snapshot.signalSources.filter(
+    (source) => source.projectId === activeProject.id && source.sourceType !== "manual"
+  );
+  const runs = snapshot.discoveryRuns.filter((run) => run.projectId === activeProject.id);
   const sourceOptions = sources.map((source) => ({ label: `${source.communityName} (${source.platform})`, value: source.id }));
 
   const runRows = useMemo(
     () =>
       runs.map((run) => {
-        const source = state.signalSources.find((item) => item.id === run.signalSourceId);
+        const source = snapshot.signalSources.find((item) => item.id === run.signalSourceId);
         return {
           key: run.id,
           cells: [
             { key: "source", content: source?.communityName ?? "Fallback intake" },
+            { key: "provider", content: run.providerType },
             { key: "status", content: run.status },
             { key: "items", content: run.itemsFound },
             { key: "candidates", content: run.candidatesCreated },
@@ -60,51 +83,105 @@ export function SignalDiscoveryScreen() {
           ]
         };
       }),
-    [runs, state.signalSources]
+    [runs, snapshot.signalSources]
   );
 
-  const submitSource = (event: FormEvent) => {
+  const submitSource = async (event: FormEvent) => {
     event.preventDefault();
-    createSignalSource({
-      projectId: activeProject.id,
-      platform: form.platform,
-      sourceType: form.sourceType,
-      communityName: form.communityName,
-      sourceUrl: form.sourceUrl,
-      keywords: splitLines(form.keywords),
-      competitorTerms: splitLines(form.competitorTerms),
-      painPointTerms: splitLines(form.painPointTerms),
-      excludedTerms: splitLines(form.excludedTerms),
-      scanFrequency: form.scanFrequency,
-      riskTolerance: form.riskTolerance,
-      isActive: form.isActive
-    });
-    setIsOpen(false);
+    if (isSavingSource || !activeProject.id) return;
+    setIsSavingSource(true);
+    setFormError(undefined);
+    try {
+      await createSource(activeProject.id, {
+        platform: form.platform,
+        sourceType: form.sourceType,
+        communityName: form.communityName,
+        sourceUrl: form.sourceUrl,
+        keywords: splitLines(form.keywords),
+        competitorTerms: splitLines(form.competitorTerms),
+        painPointTerms: splitLines(form.painPointTerms),
+        excludedTerms: splitLines(form.excludedTerms),
+        scanFrequency: form.scanFrequency,
+        riskTolerance: form.riskTolerance,
+        isActive: form.isActive
+      });
+      setIsOpen(false);
+    } catch (submissionError) {
+      setFormError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : "The signal source could not be created."
+      );
+    } finally {
+      setIsSavingSource(false);
+    }
   };
 
   const runSource = async (sourceId: string) => {
     setRunningSourceId(sourceId);
-    await runSignalDiscovery(sourceId);
-    setRunningSourceId(null);
+    setOperationError(undefined);
+    try {
+      const result = await runPersistedSource(activeProject.id, sourceId);
+      if (result.run.status === "failed") {
+        setOperationError(result.run.errors.join(" ") || "The discovery run failed.");
+      }
+    } catch (runError) {
+      setOperationError(
+        runError instanceof Error ? runError.message : "The discovery run could not be started."
+      );
+    } finally {
+      setRunningSourceId(null);
+    }
+  };
+
+  const toggleSource = async (sourceId: string, isActive: boolean) => {
+    setUpdatingSourceId(sourceId);
+    setOperationError(undefined);
+    try {
+      await updateSource(activeProject.id, sourceId, { isActive });
+    } catch (updateError) {
+      setOperationError(
+        updateError instanceof Error ? updateError.message : "The signal source could not be updated."
+      );
+    } finally {
+      setUpdatingSourceId(null);
+    }
   };
 
   return (
     <>
       <PageHeading
         title="Autonomous Pipeline"
-        description="Configure source scanning. Each run maps candidates, deliberates, applies policy gates, prepares drafts, and writes audit records."
+        description="Configure source scanning. Each run persists normalized signals and deterministic candidate mappings for later deliberation."
         breadcrumbs={[{ text: "ReydarOS", href: "/" }, { text: "Autonomous Pipeline", href: "/signal-discovery" }]}
-        action={<Button appearance="primary" onClick={() => setIsOpen(true)}>Add source</Button>}
+        action={
+          <Button
+            appearance="primary"
+            isDisabled={status !== "ready" || !activeProject.id}
+            onClick={() => {
+              setFormError(undefined);
+              setIsOpen(true);
+            }}
+          >
+            Add source
+          </Button>
+        }
       />
 
       <Box paddingBlockEnd="space.200">
+        <DiscoveryLoadState status={status} error={error} retry={retry} />
+        {operationError ? (
+          <SectionMessage appearance="error" title="Discovery action failed">
+            <p>{operationError}</p>
+          </SectionMessage>
+        ) : null}
         <Banner appearance="warning">
-          Autonomous discovery is the default path. Policy-cleared items are logged; uncertain or risky items are routed into the Review Inbox.
+          Phase 2 stops after candidate mapping. Deliberation, drafting, autonomy, and posting remain local and are not run by source scans.
         </Banner>
       </Box>
 
       <SectionPanel title="Configured signal sources" description={`Active project: ${activeProject.name}`}>
-        {sources.length ? (
+        {status === "ready" && sources.length ? (
           <DynamicTable
             head={{
               cells: [
@@ -133,43 +210,62 @@ export function SignalDiscoveryScreen() {
                 {
                   key: "action",
                   content: (
-                    <LoadingButton
-                      isLoading={runningSourceId === source.id}
-                      onClick={() => runSource(source.id)}
-                      isDisabled={!source.isActive}
-                    >
-                      Run autonomous scan
-                    </LoadingButton>
+                    <Inline space="space.050" shouldWrap>
+                      <LoadingButton
+                        isLoading={runningSourceId === source.id}
+                        onClick={() => runSource(source.id)}
+                        isDisabled={!source.isActive || updatingSourceId === source.id}
+                      >
+                        Run discovery
+                      </LoadingButton>
+                      <LoadingButton
+                        isLoading={updatingSourceId === source.id}
+                        onClick={() => toggleSource(source.id, !source.isActive)}
+                      >
+                        {source.isActive ? "Deactivate" : "Activate"}
+                      </LoadingButton>
+                    </Inline>
                   )
                 }
               ]
             }))}
             rowsPerPage={8}
           />
-        ) : (
+        ) : status === "ready" ? (
           <EmptyState
             header="No signal sources configured"
-            description="Add a source to start the autonomous discovery, deliberation, and policy pipeline."
-            primaryAction={<Button appearance="primary" onClick={() => setIsOpen(true)}>Add source</Button>}
+            description="Add a source to start database-backed discovery and candidate mapping."
+            primaryAction={
+              <Button
+                appearance="primary"
+                onClick={() => {
+                  setFormError(undefined);
+                  setIsOpen(true);
+                }}
+              >
+                Add source
+              </Button>
+            }
           />
-        )}
+        ) : null}
       </SectionPanel>
 
       <Box paddingBlockStart="space.200">
         <SectionPanel
           title="Discovery run history"
-          description="Every scan records discovery, mapping, deliberation, policy results, drafts, and action logs."
+          description="Every scan records its provider, lifecycle, normalized items, candidate count, and any failure details."
           action={
             <div className="form-field panel-action-select">
               <Select isSearchable={false} placeholder="Jump to source" options={sourceOptions} />
             </div>
           }
         >
-          {runs.length ? (
+          {status === "ready" && runs.length ? (
             <DynamicTable
               head={{
                 cells: [
                   { key: "source", content: "Source" },
+                  { key: "provider", content: "Provider" },
                   { key: "status", content: "Status" },
                   { key: "items", content: "Items found" },
                   { key: "candidates", content: "Candidates" },
@@ -180,9 +276,9 @@ export function SignalDiscoveryScreen() {
               rows={runRows}
               rowsPerPage={8}
             />
-          ) : (
-            <EmptyState header="No discovery runs yet" description="Run a source to populate discovered items, candidates, decisions, drafts, and audit logs." />
-          )}
+          ) : status === "ready" ? (
+            <EmptyState header="No discovery runs yet" description="Run a source to persist discovered items and mapped candidates." />
+          ) : null}
         </SectionPanel>
       </Box>
 
@@ -190,17 +286,33 @@ export function SignalDiscoveryScreen() {
         <AppDialog
           footer={
             <>
-              <Button type="button" appearance="subtle" onClick={() => setIsOpen(false)}>Cancel</Button>
-              <Button appearance="primary" type="submit">Create source</Button>
+              <Button
+                type="button"
+                appearance="subtle"
+                isDisabled={isSavingSource}
+                onClick={() => setIsOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button appearance="primary" type="submit" isDisabled={isSavingSource}>
+                {isSavingSource ? "Creating…" : "Create source"}
+              </Button>
             </>
           }
-          onClose={() => setIsOpen(false)}
+          onClose={() => {
+            if (!isSavingSource) setIsOpen(false);
+          }}
           onSubmit={submitSource}
           testId="add-signal-source-dialog"
           title="Add signal source"
           width="large"
         >
           <Stack space="space.200">
+                  {formError ? (
+                    <SectionMessage appearance="error" title="Signal source was not created">
+                      <p>{formError}</p>
+                    </SectionMessage>
+                  ) : null}
                   <Inline space="space.200" shouldWrap>
                     <div className="form-field">
                       <Field label="Platform">
@@ -219,7 +331,10 @@ export function SignalDiscoveryScreen() {
                             { label: "Reddit API", value: "reddit" }
                           ]}
                           value={{ label: form.sourceType, value: form.sourceType }}
-                          onChange={(option) => setForm((current) => ({ ...current, sourceType: String(option?.value ?? "mock") as SourceType }))}
+                          onChange={(option) => setForm((current) => ({
+                            ...current,
+                            sourceType: String(option?.value ?? "mock") as SignalSourceCreateInput["sourceType"]
+                          }))}
                         />
                       </Field>
                     </div>
@@ -228,7 +343,7 @@ export function SignalDiscoveryScreen() {
                         <Textfield
                           id="community-name"
                           value={form.communityName}
-                          onChange={(event) => setForm((current) => ({ ...current, communityName: event.currentTarget.value }))}
+                          onChange={(event) => updateForm("communityName", event.currentTarget.value)}
                           isRequired
                         />
                       </Field>
@@ -238,27 +353,27 @@ export function SignalDiscoveryScreen() {
                     <Textfield
                       id="source-url"
                       value={form.sourceUrl}
-                      onChange={(event) => setForm((current) => ({ ...current, sourceUrl: event.currentTarget.value }))}
+                      onChange={(event) => updateForm("sourceUrl", event.currentTarget.value)}
                     />
                   </Field>
                   <div className="dense-grid">
                     <Field label="Keywords" htmlFor="source-keywords">
-                      <TextArea id="source-keywords" value={form.keywords} onChange={(event) => setForm((current) => ({ ...current, keywords: event.currentTarget.value }))} minimumRows={5} />
+                      <TextArea id="source-keywords" value={form.keywords} onChange={(event) => updateForm("keywords", event.currentTarget.value)} minimumRows={5} />
                     </Field>
                     <Field label="Competitor terms" htmlFor="source-competitors">
-                      <TextArea id="source-competitors" value={form.competitorTerms} onChange={(event) => setForm((current) => ({ ...current, competitorTerms: event.currentTarget.value }))} minimumRows={5} />
+                      <TextArea id="source-competitors" value={form.competitorTerms} onChange={(event) => updateForm("competitorTerms", event.currentTarget.value)} minimumRows={5} />
                     </Field>
                     <Field label="Pain-point terms" htmlFor="source-pain">
-                      <TextArea id="source-pain" value={form.painPointTerms} onChange={(event) => setForm((current) => ({ ...current, painPointTerms: event.currentTarget.value }))} minimumRows={5} />
+                      <TextArea id="source-pain" value={form.painPointTerms} onChange={(event) => updateForm("painPointTerms", event.currentTarget.value)} minimumRows={5} />
                     </Field>
                     <Field label="Excluded terms" htmlFor="source-excluded">
-                      <TextArea id="source-excluded" value={form.excludedTerms} onChange={(event) => setForm((current) => ({ ...current, excludedTerms: event.currentTarget.value }))} minimumRows={5} />
+                      <TextArea id="source-excluded" value={form.excludedTerms} onChange={(event) => updateForm("excludedTerms", event.currentTarget.value)} minimumRows={5} />
                     </Field>
                   </div>
                   <Inline space="space.200" shouldWrap>
                     <div className="form-field">
                       <Field label="Scan frequency" htmlFor="scan-frequency">
-                        <Textfield id="scan-frequency" value={form.scanFrequency} onChange={(event) => setForm((current) => ({ ...current, scanFrequency: event.currentTarget.value }))} />
+                        <Textfield id="scan-frequency" value={form.scanFrequency} onChange={(event) => updateForm("scanFrequency", event.currentTarget.value)} />
                       </Field>
                     </div>
                     <div className="form-field">

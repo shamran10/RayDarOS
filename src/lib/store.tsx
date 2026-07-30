@@ -2,11 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { createAutonomousActionLog } from "@/lib/autonomy/autonomous-action-service";
-import { mapDiscoveredItemToCandidates, mapOpportunityToCandidate } from "@/lib/candidates/candidate-mapping-service";
-import { runHeuristicDarmAnalysis } from "@/lib/darm";
 import { runCandidateDeliberation } from "@/lib/deliberation/deliberation-service";
-import { runDiscoverySource } from "@/lib/discovery/discovery-service";
-import { createManualDiscoveredItem } from "@/lib/discovery/providers/manual-provider";
 import { createMemoryInsightFromOutcome } from "@/lib/memory/memory-service";
 import {
   createCommunityRuleRecord,
@@ -27,7 +23,6 @@ import type {
 } from "@/lib/project-brain/contracts";
 import { initialState } from "@/lib/seed-data";
 import type {
-  AnalysisInput,
   AutonomyPolicy,
   CandidateStatus,
   CommunityRule,
@@ -41,8 +36,7 @@ import type {
   OpportunityStatus,
   Project,
   ReydarState,
-  ResponseDraft,
-  SignalSource
+  ResponseDraft
 } from "@/lib/types";
 
 const STORAGE_KEY = "reydaros.mvp.state.v1";
@@ -94,10 +88,6 @@ interface StoreContextValue {
     rule: Omit<CommunityRule, "id" | "createdAt" | "updatedAt">
   ) => Promise<CommunityRule>;
   updateCommunityRule: (ruleId: string, patch: Partial<CommunityRule>) => Promise<CommunityRule>;
-  createSignalSource: (source: Omit<SignalSource, "id" | "createdAt" | "updatedAt" | "lastScannedAt">) => void;
-  updateSignalSource: (sourceId: string, patch: Partial<SignalSource>) => void;
-  runSignalDiscovery: (sourceId: string) => Promise<void>;
-  analyzeConversation: (input: Omit<AnalysisInput, "project" | "productKnowledge" | "marketKnowledge" | "communityRules">) => Promise<string>;
   runDeliberationForCandidate: (candidateId: string) => Promise<string | undefined>;
   updateCandidateStatus: (candidateId: string, status: CandidateStatus) => void;
   updateAutonomyPolicy: (policyId: string, patch: Partial<AutonomyPolicy>) => void;
@@ -305,22 +295,26 @@ function createDraftFromFinalDecision(
   };
 }
 
-function withoutProjectBrain(state: ReydarState): ReydarState {
+function withoutServerPersistedData(state: ReydarState): ReydarState {
   return {
     ...state,
     projects: [],
     productKnowledge: [],
     marketKnowledge: [],
-    communityRules: []
+    communityRules: [],
+    signalSources: [],
+    discoveryRuns: [],
+    discoveredItems: [],
+    conversationCandidates: []
   };
 }
 
 function loadState() {
-  if (typeof window === "undefined") return withoutProjectBrain(initialState);
+  if (typeof window === "undefined") return withoutServerPersistedData(initialState);
 
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (!stored) return withoutProjectBrain(initialState);
+    if (!stored) return withoutServerPersistedData(initialState);
     const parsed = JSON.parse(stored) as Partial<ReydarState>;
     return {
       ...initialState,
@@ -329,10 +323,10 @@ function loadState() {
       productKnowledge: [],
       marketKnowledge: [],
       communityRules: [],
-      signalSources: parsed.signalSources ?? initialState.signalSources,
-      discoveryRuns: parsed.discoveryRuns ?? initialState.discoveryRuns,
-      discoveredItems: parsed.discoveredItems ?? initialState.discoveredItems,
-      conversationCandidates: parsed.conversationCandidates ?? initialState.conversationCandidates,
+      signalSources: [],
+      discoveryRuns: [],
+      discoveredItems: [],
+      conversationCandidates: [],
       deliberationRuns: parsed.deliberationRuns ?? initialState.deliberationRuns,
       deliberationAgentResults: parsed.deliberationAgentResults ?? initialState.deliberationAgentResults,
       candidateScores: parsed.candidateScores ?? initialState.candidateScores,
@@ -341,12 +335,12 @@ function loadState() {
       autonomousActionLogs: parsed.autonomousActionLogs ?? initialState.autonomousActionLogs
     } as ReydarState;
   } catch {
-    return withoutProjectBrain(initialState);
+    return withoutServerPersistedData(initialState);
   }
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<ReydarState>(() => withoutProjectBrain(initialState));
+  const [state, setState] = useState<ReydarState>(() => withoutServerPersistedData(initialState));
   const [localStateLoaded, setLocalStateLoaded] = useState(false);
   const [projectBrainStatus, setProjectBrainStatus] = useState<ProjectBrainStatus>("loading");
   const [projectBrainError, setProjectBrainError] = useState<string>();
@@ -363,6 +357,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     delete localState.productKnowledge;
     delete localState.marketKnowledge;
     delete localState.communityRules;
+    delete localState.signalSources;
+    delete localState.discoveryRuns;
+    delete localState.discoveredItems;
+    delete localState.conversationCandidates;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(localState));
   }, [localStateLoaded, state]);
 
@@ -530,29 +528,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [state.communityRules]
   );
 
-  const createSignalSource = useCallback<StoreContextValue["createSignalSource"]>(
-    (source) => {
-      const created: SignalSource = {
-        ...source,
-        id: makeId("source"),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      setState((current) => ({ ...current, signalSources: [created, ...current.signalSources] }));
-      appendActivity(`Created signal source for ${created.communityName}.`, created.projectId, "SignalSource", created.id);
-    },
-    [appendActivity]
-  );
-
-  const updateSignalSource = useCallback<StoreContextValue["updateSignalSource"]>((sourceId, patch) => {
-    setState((current) => ({
-      ...current,
-      signalSources: current.signalSources.map((source) =>
-        source.id === sourceId ? { ...source, ...patch, updatedAt: new Date().toISOString() } : source
-      )
-    }));
-  }, []);
-
   const runDeliberationForCandidate = useCallback<StoreContextValue["runDeliberationForCandidate"]>(
     async (candidateId) => {
       const candidate = state.conversationCandidates.find((item) => item.id === candidateId);
@@ -637,202 +612,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       state.productKnowledge,
       state.projects
     ]
-  );
-
-  const runSignalDiscovery = useCallback<StoreContextValue["runSignalDiscovery"]>(
-    async (sourceId) => {
-      const source = state.signalSources.find((item) => item.id === sourceId);
-      if (!source) return;
-      const project = state.projects.find((item) => item.id === source.projectId) ?? state.projects[0];
-      const discovery = await runDiscoverySource({ project, source });
-      const context = {
-        project,
-        productKnowledge: state.productKnowledge.filter((item) => item.projectId === project.id),
-        marketKnowledge: state.marketKnowledge.filter((item) => item.projectId === project.id),
-        communityRules: state.communityRules.filter((item) => item.projectId === project.id)
-      };
-      const candidates = discovery.items.flatMap((item) => mapDiscoveredItemToCandidates({ item, ...context }));
-      const deliberated = candidates.map((candidate) => {
-        const result = runCandidateDeliberation({
-          candidate,
-          project,
-          productKnowledge: context.productKnowledge,
-          marketKnowledge: context.marketKnowledge,
-          communityRules: context.communityRules,
-          autonomyPolicies: state.autonomyPolicies.filter((item) => item.projectId === project.id)
-        });
-        const opportunity = createOpportunityFromCandidate(candidate, result.finalDecision, result.score);
-        const draft = createDraftFromFinalDecision(opportunity.id, candidate, result.run.id, result.finalDecision);
-        const actionLog = createAutonomousActionLog({
-          project,
-          candidate,
-          run: result.run,
-          finalDecision: result.finalDecision,
-          policies: state.autonomyPolicies,
-          communityRules: context.communityRules
-        });
-        const status: CandidateStatus =
-          result.run.autonomyStatus === "safe_to_auto_engage"
-            ? "safe_to_auto_engage"
-            : result.run.autonomyStatus === "blocked"
-              ? "blocked"
-              : result.run.autonomyStatus === "monitor_only"
-                ? "monitor_only"
-                : result.run.autonomyStatus === "save_as_insight_only"
-                  ? "saved_as_insight"
-                  : "queued_for_approval";
-        return {
-          candidate: { ...candidate, opportunityId: opportunity.id, status, updatedAt: new Date().toISOString() },
-          result,
-          opportunity,
-          draft,
-          actionLog
-        };
-      });
-
-      setState((current) => ({
-        ...current,
-        signalSources: current.signalSources.map((item) =>
-          item.id === source.id ? { ...item, lastScannedAt: new Date().toISOString(), updatedAt: new Date().toISOString() } : item
-        ),
-        discoveryRuns: [
-          { ...discovery.run, candidatesCreated: candidates.length, updatedAt: new Date().toISOString() },
-          ...current.discoveryRuns
-        ],
-        discoveredItems: [...discovery.items, ...current.discoveredItems],
-        conversationCandidates: [...deliberated.map((item) => item.candidate), ...current.conversationCandidates],
-        opportunities: [...deliberated.map((item) => item.opportunity), ...current.opportunities],
-        responseDrafts: [
-          ...deliberated.flatMap((item) => (item.draft ? [item.draft] : [])),
-          ...current.responseDrafts
-        ],
-        deliberationRuns: [...deliberated.map((item) => item.result.run), ...current.deliberationRuns],
-        deliberationAgentResults: [
-          ...deliberated.flatMap((item) => item.result.agentResults),
-          ...current.deliberationAgentResults
-        ],
-        candidateScores: [...deliberated.map((item) => item.result.score), ...current.candidateScores],
-        finalDecisions: [...deliberated.map((item) => item.result.finalDecision), ...current.finalDecisions],
-        autonomousActionLogs: [...deliberated.map((item) => item.actionLog), ...current.autonomousActionLogs],
-        activityLogs: [
-          {
-            id: makeId("activity"),
-            projectId: project.id,
-            entityType: "DiscoveryRun",
-            entityId: discovery.run.id,
-            action: "discovery.completed",
-            message: `Mock discovery found ${discovery.items.length} item${discovery.items.length === 1 ? "" : "s"} and mapped ${candidates.length} candidate${candidates.length === 1 ? "" : "s"}.`,
-            createdAt: new Date().toISOString()
-          },
-          ...current.activityLogs
-        ]
-      }));
-    },
-    [state.autonomyPolicies, state.communityRules, state.marketKnowledge, state.productKnowledge, state.projects, state.signalSources]
-  );
-
-  const analyzeConversation = useCallback<StoreContextValue["analyzeConversation"]>(
-    async (input) => {
-      const project = state.projects.find((item) => item.id === state.activeProjectId) ?? state.projects[0];
-      const result = runHeuristicDarmAnalysis({
-        ...input,
-        project,
-        productKnowledge: state.productKnowledge.filter((item) => item.projectId === project.id),
-        marketKnowledge: state.marketKnowledge.filter((item) => item.projectId === project.id),
-        communityRules: state.communityRules.filter((item) => item.projectId === project.id)
-      });
-      const manualRunId = makeId("manual-run");
-      const manualDiscoveryRun = {
-        id: manualRunId,
-        projectId: project.id,
-        signalSourceId: "manual-intake",
-        status: "completed" as const,
-        startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        itemsFound: 1,
-        candidatesCreated: 1,
-        errors: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      const manualItem = createManualDiscoveredItem({
-        project,
-        discoveryRunId: manualRunId,
-        platform: input.platform,
-        community: input.community || "Unknown community",
-        title: input.threadTitle || "Fallback conversation analysis",
-        body: input.sourceText,
-        url: input.threadUrl || "",
-        now: new Date().toISOString()
-      });
-      const candidate = {
-        ...mapOpportunityToCandidate(result.opportunity),
-        discoveredItemId: manualItem.id
-      };
-      const deliberation = runCandidateDeliberation({
-        candidate,
-        project,
-        productKnowledge: state.productKnowledge.filter((item) => item.projectId === project.id),
-        marketKnowledge: state.marketKnowledge.filter((item) => item.projectId === project.id),
-        communityRules: state.communityRules.filter((item) => item.projectId === project.id),
-        autonomyPolicies: state.autonomyPolicies.filter((item) => item.projectId === project.id)
-      });
-      const candidateStatus: CandidateStatus =
-        deliberation.run.autonomyStatus === "safe_to_auto_engage"
-          ? "safe_to_auto_engage"
-          : deliberation.run.autonomyStatus === "blocked"
-            ? "blocked"
-            : deliberation.run.autonomyStatus === "monitor_only"
-              ? "monitor_only"
-              : deliberation.run.autonomyStatus === "save_as_insight_only"
-                ? "saved_as_insight"
-                : "queued_for_approval";
-      const finalDraft = createDraftFromFinalDecision(
-        result.opportunity.id,
-        candidate,
-        deliberation.run.id,
-        deliberation.finalDecision
-      );
-      const actionLog = createAutonomousActionLog({
-        project,
-        candidate,
-        run: deliberation.run,
-        finalDecision: deliberation.finalDecision,
-        policies: state.autonomyPolicies,
-        communityRules: state.communityRules
-      });
-
-      setState((current) => ({
-        ...current,
-        discoveryRuns: [manualDiscoveryRun, ...current.discoveryRuns],
-        discoveredItems: [manualItem, ...current.discoveredItems],
-        conversationCandidates: [{ ...candidate, status: candidateStatus, updatedAt: new Date().toISOString() }, ...current.conversationCandidates],
-        deliberationRuns: [deliberation.run, ...current.deliberationRuns],
-        deliberationAgentResults: [...deliberation.agentResults, ...current.deliberationAgentResults],
-        candidateScores: [deliberation.score, ...current.candidateScores],
-        finalDecisions: [deliberation.finalDecision, ...current.finalDecisions],
-        autonomousActionLogs: [actionLog, ...current.autonomousActionLogs],
-        opportunities: [result.opportunity, ...current.opportunities],
-        responseDrafts: [...(finalDraft ? [finalDraft] : []), ...result.responseDrafts, ...current.responseDrafts],
-        guardrailChecks: [...result.guardrailChecks, ...current.guardrailChecks],
-        marketInsights: [...result.insightCandidates, ...current.marketInsights],
-        activityLogs: [
-          {
-            id: makeId("activity"),
-            projectId: project.id,
-            entityType: "Opportunity",
-            entityId: result.opportunity.id,
-            action: "darm.analysis.created",
-            message: `DARM analyzed ${result.opportunity.threadTitle}.`,
-            createdAt: new Date().toISOString()
-          },
-          ...current.activityLogs
-        ]
-      }));
-
-      return result.opportunity.id;
-    },
-    [state.activeProjectId, state.autonomyPolicies, state.communityRules, state.marketKnowledge, state.productKnowledge, state.projects]
   );
 
   const updateOpportunityStatus = useCallback<StoreContextValue["updateOpportunityStatus"]>((opportunityId, status) => {
@@ -948,7 +727,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       projects: current.projects,
       productKnowledge: current.productKnowledge,
       marketKnowledge: current.marketKnowledge,
-      communityRules: current.communityRules
+      communityRules: current.communityRules,
+      signalSources: [],
+      discoveryRuns: [],
+      discoveredItems: [],
+      conversationCandidates: []
     }));
   }, []);
 
@@ -968,10 +751,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       updateKnowledge,
       addCommunityRule,
       updateCommunityRule,
-      createSignalSource,
-      updateSignalSource,
-      runSignalDiscovery,
-      analyzeConversation,
       runDeliberationForCandidate,
       updateCandidateStatus,
       updateAutonomyPolicy,
@@ -988,16 +767,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       addCommunityRule,
       addMarketKnowledge,
       addProductKnowledge,
-      analyzeConversation,
       approveInsight,
       archiveProject,
-      createSignalSource,
       createProject,
       logOutcome,
       resetDemoData,
       retryProjectBrain,
       runDeliberationForCandidate,
-      runSignalDiscovery,
       saveInsight,
       setActiveProjectId,
       setDraftStatus,
@@ -1010,8 +786,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       updateDraft,
       updateKnowledge,
       updateOpportunityStatus,
-      updateProject,
-      updateSignalSource
+      updateProject
     ]
   );
 

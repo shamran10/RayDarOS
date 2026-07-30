@@ -6,21 +6,26 @@ import Button, { LoadingButton } from "@atlaskit/button";
 import Banner from "@atlaskit/banner";
 import Flag, { FlagGroup } from "@atlaskit/flag";
 import Select from "@/components/apple-select";
+import SectionMessage from "@atlaskit/section-message";
 import Tabs, { Tab, TabList, TabPanel } from "@atlaskit/tabs";
 import TextArea from "@atlaskit/textarea";
 import Textfield from "@atlaskit/textfield";
 import SearchIcon from "@atlaskit/icon/core/search";
 import { Box, Inline, Stack } from "@atlaskit/primitives";
+import { DiscoveryLoadState } from "@/components/discovery-load-state";
 import { Field } from "@/components/field";
 import { PageHeading } from "@/components/page-heading";
 import { SectionPanel } from "@/components/section-panel";
+import { useDiscovery } from "@/lib/discovery/context";
 import { useReydar } from "@/lib/store";
 
 export function SignalMonitorScreen() {
   const router = useRouter();
-  const { activeProject, analyzeConversation } = useReydar();
+  const { activeProject } = useReydar();
+  const { status, error, retry, runManual } = useDiscovery();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [flag, setFlag] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<string>();
   const [redditForm, setRedditForm] = useState({
     threadUrl: "",
     community: "",
@@ -33,52 +38,99 @@ export function SignalMonitorScreen() {
     sourceText: "",
     sourceUrl: ""
   });
+  const updateRedditForm = <Key extends keyof typeof redditForm>(
+    key: Key,
+    value: (typeof redditForm)[Key]
+  ) => {
+    setRedditForm((current) => ({ ...current, [key]: value }));
+  };
+  const updateRawForm = <Key extends keyof typeof rawForm>(
+    key: Key,
+    value: (typeof rawForm)[Key]
+  ) => {
+    setRawForm((current) => ({ ...current, [key]: value }));
+  };
 
   const analyzeReddit = async (event: FormEvent) => {
     event.preventDefault();
+    if (isAnalyzing || !activeProject.id) return;
     setIsAnalyzing(true);
+    setOperationError(undefined);
     const titleFromUrl = redditForm.threadUrl.split("/").filter(Boolean).slice(-1)[0]?.replaceAll("_", " ") ?? "Fallback Reddit thread";
-    const opportunityId = await analyzeConversation({
-      platform: "Reddit",
-      community: redditForm.community || "Unknown subreddit",
-      threadTitle: titleFromUrl,
-      threadUrl: redditForm.threadUrl,
-      sourceText:
-        redditForm.notes ||
-        `Fallback Reddit URL submitted for analysis: ${redditForm.threadUrl}. Add raw conversation text for deeper analysis.`,
-      notes: redditForm.notes
-    });
-    setFlag("Opportunity card created from Reddit URL.");
-    setIsAnalyzing(false);
-    router.push(`/opportunities/${opportunityId}`);
+    try {
+      const result = await runManual(activeProject.id, {
+        platform: "Reddit",
+        community: redditForm.community || "Unknown subreddit",
+        title: titleFromUrl,
+        body:
+          redditForm.notes ||
+          `Fallback Reddit URL submitted for candidate mapping: ${redditForm.threadUrl}. Add raw conversation text for stronger mapping.`,
+        url: redditForm.threadUrl
+      });
+      if (result.run.status === "failed") {
+        throw new Error(result.run.errors.join(" ") || "Manual discovery failed.");
+      }
+      setFlag("Candidate mapped from Reddit URL.");
+      const candidateId = result.candidates[0]?.id;
+      router.push(candidateId ? `/candidates?candidate=${encodeURIComponent(candidateId)}` : "/candidates");
+    } catch (analysisError) {
+      setOperationError(
+        analysisError instanceof Error
+          ? analysisError.message
+          : "The Reddit URL could not be mapped."
+      );
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const analyzeRaw = async (event: FormEvent) => {
     event.preventDefault();
+    if (isAnalyzing || !activeProject.id) return;
     setIsAnalyzing(true);
-    const opportunityId = await analyzeConversation({
-      platform: rawForm.platform,
-      community: rawForm.community || "Unknown community",
-      threadTitle: rawForm.threadTitle || "Raw conversation analysis",
-      threadUrl: rawForm.sourceUrl,
-      sourceText: rawForm.sourceText
-    });
-    setFlag("Opportunity card created from raw conversation.");
-    setIsAnalyzing(false);
-    router.push(`/opportunities/${opportunityId}`);
+    setOperationError(undefined);
+    try {
+      const result = await runManual(activeProject.id, {
+        platform: rawForm.platform,
+        community: rawForm.community || "Unknown community",
+        title: rawForm.threadTitle || "Raw conversation analysis",
+        body: rawForm.sourceText,
+        url: rawForm.sourceUrl
+      });
+      if (result.run.status === "failed") {
+        throw new Error(result.run.errors.join(" ") || "Manual discovery failed.");
+      }
+      setFlag("Candidate mapped from raw conversation.");
+      const candidateId = result.candidates[0]?.id;
+      router.push(candidateId ? `/candidates?candidate=${encodeURIComponent(candidateId)}` : "/candidates");
+    } catch (analysisError) {
+      setOperationError(
+        analysisError instanceof Error
+          ? analysisError.message
+          : "The conversation could not be mapped."
+      );
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   return (
     <>
       <PageHeading
         title="Manual Intake Fallback"
-        description="Admin fallback for one-off URLs or pasted conversations when a source provider cannot scan them."
+        description="Admin fallback for persisting and mapping one-off URLs or pasted conversations when a source provider cannot scan them."
         breadcrumbs={[{ text: "ReydarOS", href: "/" }, { text: "Manual Intake Fallback", href: "/signal-monitor" }]}
       />
 
       <Box paddingBlockEnd="space.200">
+        <DiscoveryLoadState status={status} error={error} retry={retry} />
+        {operationError ? (
+          <SectionMessage appearance="error" title="Manual intake failed">
+            <p>{operationError}</p>
+          </SectionMessage>
+        ) : null}
         <Banner appearance="warning">
-          This fallback still enters the autonomous pipeline after intake. Use configured source scans as the default path.
+          Manual intake persists a discovery run, discovered item, and mapped candidate. It does not run deliberation or drafting in Phase 2.
         </Banner>
       </Box>
 
@@ -99,7 +151,7 @@ export function SignalMonitorScreen() {
                         id="reddit-url"
                         placeholder="https://www.reddit.com/r/startups/comments/..."
                         value={redditForm.threadUrl}
-                        onChange={(event) => setRedditForm((current) => ({ ...current, threadUrl: event.currentTarget.value }))}
+                        onChange={(event) => updateRedditForm("threadUrl", event.currentTarget.value)}
                         isRequired
                       />
                     </Field>
@@ -110,7 +162,7 @@ export function SignalMonitorScreen() {
                         id="reddit-community"
                         placeholder="r/startups"
                         value={redditForm.community}
-                        onChange={(event) => setRedditForm((current) => ({ ...current, community: event.currentTarget.value }))}
+                        onChange={(event) => updateRedditForm("community", event.currentTarget.value)}
                       />
                     </Field>
                   </div>
@@ -119,7 +171,7 @@ export function SignalMonitorScreen() {
                   <TextArea
                     id="reddit-notes"
                     value={redditForm.notes}
-                    onChange={(event) => setRedditForm((current) => ({ ...current, notes: event.currentTarget.value }))}
+                    onChange={(event) => updateRedditForm("notes", event.currentTarget.value)}
                     minimumRows={8}
                     placeholder="Paste the thread text or key comments here for stronger MVP analysis."
                   />
@@ -129,11 +181,12 @@ export function SignalMonitorScreen() {
                     appearance="primary"
                     type="submit"
                     isLoading={isAnalyzing}
+                    isDisabled={status !== "ready"}
                     iconBefore={<SearchIcon label="" />}
                   >
                     Analyze Reddit thread
                   </LoadingButton>
-                  <span className="small-text muted-text">Creates an opportunity card and response drafts.</span>
+                    <span className="small-text muted-text">Creates a persisted discovered item and mapped candidate.</span>
                 </div>
               </Stack>
             </form>
@@ -156,7 +209,7 @@ export function SignalMonitorScreen() {
                       <Textfield
                         id="raw-community"
                         value={rawForm.community}
-                        onChange={(event) => setRawForm((current) => ({ ...current, community: event.currentTarget.value }))}
+                        onChange={(event) => updateRawForm("community", event.currentTarget.value)}
                       />
                     </Field>
                   </div>
@@ -165,7 +218,7 @@ export function SignalMonitorScreen() {
                       <Textfield
                         id="raw-title"
                         value={rawForm.threadTitle}
-                        onChange={(event) => setRawForm((current) => ({ ...current, threadTitle: event.currentTarget.value }))}
+                        onChange={(event) => updateRawForm("threadTitle", event.currentTarget.value)}
                         isRequired
                       />
                     </Field>
@@ -175,7 +228,7 @@ export function SignalMonitorScreen() {
                   <TextArea
                     id="raw-text"
                     value={rawForm.sourceText}
-                    onChange={(event) => setRawForm((current) => ({ ...current, sourceText: event.currentTarget.value }))}
+                    onChange={(event) => updateRawForm("sourceText", event.currentTarget.value)}
                     minimumRows={12}
                     isRequired
                   />
@@ -184,13 +237,14 @@ export function SignalMonitorScreen() {
                   <Textfield
                     id="source-url"
                     value={rawForm.sourceUrl}
-                    onChange={(event) => setRawForm((current) => ({ ...current, sourceUrl: event.currentTarget.value }))}
+                    onChange={(event) => updateRawForm("sourceUrl", event.currentTarget.value)}
                   />
                 </Field>
                 <LoadingButton
                   appearance="primary"
                   type="submit"
                   isLoading={isAnalyzing}
+                  isDisabled={status !== "ready"}
                   iconBefore={<SearchIcon label="" />}
                 >
                   Run fallback intake
@@ -225,7 +279,7 @@ export function SignalMonitorScreen() {
       </SectionPanel>
 
       <FlagGroup onDismissed={() => setFlag(null)}>
-        {flag ? <Flag id="signal-created" title="Analysis complete" description={flag} appearance="success" /> : null}
+        {flag ? <Flag id="signal-created" title="Mapping complete" description={flag} appearance="success" /> : null}
       </FlagGroup>
     </>
   );

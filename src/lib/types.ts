@@ -172,6 +172,7 @@ export interface DiscoveryRun {
   id: string;
   projectId: string;
   signalSourceId: string;
+  providerType: SourceType;
   status: DiscoveryRunStatus;
   startedAt: string;
   completedAt?: string;
