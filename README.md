@@ -25,13 +25,15 @@ The default ReydarOS flow is:
 1. `Projects` define the product, audience, risk tolerance, knowledge, and community rules.
 2. `Autonomous Pipeline` persists configured signal sources and scans them through mock, manual, or existing Reddit provider adapters.
 3. Each database-backed discovery run normalizes and deduplicates discovered items, then deterministically maps them into candidate engagement points.
-4. DARM deliberation scores each candidate, creates agent reasoning, and produces a final decision; this and later stages remain on the local MVP boundary until Phase 3.
+4. Starting deliberation creates or reuses one database-backed Opportunity for the selected candidate, then persists an immutable eight-agent run revision, score, and final decision.
 5. Autonomy policies and guardrails decide whether the item can be auto-cleared, blocked, saved as insight, monitored, or sent to review.
 6. `Review Inbox` shows approval-gated exceptions and high-value items needing human attention.
 7. `Review Studio` lets the operator edit, approve, reject, or save learning from drafts.
 8. `Audit Log` preserves traceability from source signal to candidate, deliberation, final decision, policy snapshot, and action state.
 
-Projects, Product Knowledge, Market Knowledge, Community Rules, Signal Sources, Discovery Runs, Discovered Items, and Conversation Candidates use typed server-side services backed by Prisma/PostgreSQL. Workspace ownership is selected and enforced on the server. These collections are explicitly excluded from browser `localStorage`; legacy local records are not imported or mapped to database project IDs. Deliberation, scores, decisions, opportunities, drafts, autonomy, analytics, action logs, and memory remain local MVP state.
+Projects, Product Knowledge, Market Knowledge, Community Rules, Signal Sources, Discovery Runs, Discovered Items, Conversation Candidates, Opportunities, Deliberation Runs, Agent Results, Candidate Scores, and Final Decisions use typed server-side services backed by Prisma/PostgreSQL. Workspace ownership is selected and enforced on the server. These collections are explicitly excluded from browser `localStorage`; legacy local records are not imported or mapped to database project IDs.
+
+Response Drafts, Guardrail Checks, Autonomy Policies, Autonomous Action Logs, Market Insights, Engagement Outcomes, Activity Logs, and analytics remain on the temporary local MVP boundary. Phase 3 database IDs are not connected to those local Phase 4 records.
 
 Manual screens are no longer part of the default operating loop. They remain available only as admin/debug fallbacks from Settings.
 
@@ -42,7 +44,9 @@ Manual screens are no longer part of the default operating loop. They remain ava
 - Mock and manual discovery providers for deterministic local verification
 - Normalized, deduplicated discovered items and deterministic database-backed candidate mapping
 - Explicit discovery loading, empty, validation, failure, and retry states
-- DARM deliberation with multi-agent reasoning, scores, final decision, and policy result
+- Database-backed Opportunity lifecycle with one Opportunity per persisted candidate
+- Deterministic eight-agent deliberation with immutable run revisions, persisted reasoning, scores, final decisions, and failure history
+- Idempotent start requests, explicit reruns, and database-enforced prevention of parallel active runs
 - Autonomy controls for thresholds, mention levels, links, disclosure, cadence, and community risk
 - Guardrails for promotion risk, community norms, product mention levels, links, and account safety
 - Review Inbox for approval-gated exceptions and high-risk/high-value opportunities
@@ -101,7 +105,7 @@ For Reddit discovery, create a Reddit developer app and set:
 - `REDDIT_USER_AGENT`
 - `REDDIT_SCAN_LIMIT`
 
-The Reddit provider is read-only. It fetches subreddit posts through the official API, then persists normalized discovered items and deterministic candidate mappings. Missing credentials fail and record only the attempted Reddit run; mock/manual discovery and the rest of the application remain available. Deliberation, policy checks, drafts, and posting are not part of Phase 2. Do not use Reddit content for model training, and review Reddit's Developer Terms/Data API Terms before any commercial deployment or write/posting integration.
+The Reddit provider is read-only. It fetches subreddit posts through the official API, then persists normalized discovered items and deterministic candidate mappings. Missing credentials fail and record only the attempted Reddit run; mock/manual discovery and the rest of the application remain available. Deliberation is a separate deterministic Phase 3 action and does not call OpenAI. Drafting, posting, and OAuth remain outside this phase. Do not use Reddit content for model training, and review Reddit's Developer Terms/Data API Terms before any commercial deployment or write/posting integration.
 
 Generate the Prisma client:
 
@@ -173,8 +177,10 @@ DESIGN.md         Visual design system notes
 - `/projects/[projectId]/community-rules` - project community rules
 - `/signal-discovery` - database-backed signal sources and discovery-run history
 - `/signal-monitor` - database-backed one-off manual discovery intake
-- `/candidates` - database-backed candidate mapping inspection
-- `/opportunities` - review inbox
+- `/candidates` - database-backed candidate mapping inspection and deliberation start
+- `/deliberation` - database-backed run history and deterministic rerun inspection
+- `/opportunities` - database-backed opportunity list for the active project
+- `/opportunities/[opportunityId]` - persisted source, candidate, run, score, and decision trail
 - `/response-studio` - review studio
 - `/autonomy-policies` - autonomy controls
 - `/action-log` - audit log
@@ -204,17 +210,48 @@ Discovery API routes:
 - `POST /api/discovery/projects/[projectId]/manual` - persist a manual run, item, and deterministic candidate mapping
 - `POST /api/discovery/reddit` - legacy read-only Reddit provider route; database-backed source scans invoke the same provider server-side
 
+Deliberation API routes:
+
+- `GET /api/deliberation/projects/[projectId]/opportunities` - list persisted Opportunities and their current terminal run for an owned project
+- `GET /api/deliberation/projects/[projectId]/opportunities/[opportunityId]` - load the full source, candidate, revision, score, agent-result, and decision trail
+- `GET /api/deliberation/projects/[projectId]/opportunities/[opportunityId]/runs` - load immutable run history for an owned Opportunity
+- `POST /api/deliberation/projects/[projectId]/candidates/[candidateId]/start` - idempotently create/reuse the candidate Opportunity and start its first run
+- `POST /api/deliberation/projects/[projectId]/opportunities/[opportunityId]/rerun` - create the next immutable run revision for the same Opportunity
+
+Start and rerun payloads contain only a request UUID. Project, organization, candidate, and Opportunity ownership are derived and verified server-side. Starting an already-deliberated candidate returns the existing record; reruns are explicit. A `PENDING` or `RUNNING` revision returns HTTP 409, and a partial unique index prevents parallel active runs at the database layer.
+
 ## Admin and Debug Fallbacks
 
 These routes are intentionally demoted from the primary navigation. They should be used for recovery, inspection, provider testing, or debugging older records.
 
 - `/signal-monitor` - one-off manual intake into persisted discovery and candidate mapping
-- `/candidates` - persisted candidate map inspection before Phase 3 deliberation
-- `/deliberation` - deliberation debug
+- `/candidates` - persisted candidate map inspection and explicit deliberation start
+- `/deliberation` - persisted deliberation and revision-history debug
 - `/autonomy-queue` - legacy approval queue
 - `/guardrails` - guardrail results
 
 ## Change Log
+
+### 2026-07-30 Phase 3 Opportunity and Deliberation Persistence
+
+- Moved Opportunities, Deliberation Runs, all eight Agent Results, Candidate Scores, and Final Decisions to typed Prisma/PostgreSQL services and App Router APIs.
+- Added one-Opportunity-per-candidate ownership, immutable run revisions, idempotent request handling, short reservation/finalization transactions, and database-enforced active-run and result uniqueness.
+- Connected Candidate Map, Deliberation Debug, Opportunity Inbox, and Opportunity Detail to persisted records with loading, empty, conflict, failure, history, and retry states.
+- Kept deterministic reasoning outside database transactions and made no OpenAI, Reddit, OAuth, Apify, drafting, posting, autonomy, analytics, or background-job changes.
+- Removed Phase 3 collections from browser `localStorage` reads and writes without importing legacy IDs; Phase 4 records remain on their isolated local compatibility boundary.
+
+Main files touched:
+
+- `prisma/schema.prisma`
+- `prisma/migrations/20260730120000_phase3_opportunity_deliberation_persistence/migration.sql`
+- `src/lib/deliberation/`
+- `src/app/api/deliberation/`
+- `src/lib/store.tsx`
+- `src/screens/candidate-map-screen.tsx`
+- `src/screens/deliberation-room-screen.tsx`
+- `src/screens/opportunity-inbox-screen.tsx`
+- `src/screens/opportunity-detail-screen.tsx`
+- `README.md`
 
 ### 2026-07-30 Phase 2 Discovery and Candidate Persistence
 

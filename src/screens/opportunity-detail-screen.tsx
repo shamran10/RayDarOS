@@ -1,72 +1,140 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import Button from "@atlaskit/button";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import Badge from "@atlaskit/badge";
 import Banner from "@atlaskit/banner";
+import Button, { LoadingButton } from "@atlaskit/button";
 import EmptyState from "@atlaskit/empty-state";
-import Select from "@/components/apple-select";
 import SectionMessage from "@atlaskit/section-message";
 import Tabs, { Tab, TabList, TabPanel } from "@atlaskit/tabs";
 import TextArea from "@atlaskit/textarea";
-import Textfield from "@atlaskit/textfield";
 import { Box, Inline, Stack } from "@atlaskit/primitives";
-import { Field } from "@/components/field";
 import { PageHeading } from "@/components/page-heading";
 import { ScoreList } from "@/components/score-list";
 import { SectionPanel } from "@/components/section-panel";
-import { AutonomyStatusLozenge, CandidateStatusLozenge, OpportunityStatusLozenge, RiskLozenge } from "@/components/status-lozenge";
-import { candidateTypeLabels, finalDecisionActionLabels, productMentionLabels, recommendedActionLabels, responseTypeLabels } from "@/lib/labels";
+import {
+  AutonomyStatusLozenge,
+  CandidateStatusLozenge,
+  OpportunityStatusLozenge,
+  RiskLozenge
+} from "@/components/status-lozenge";
+import { loadOpportunityDetail } from "@/lib/deliberation/client";
+import { useDeliberation } from "@/lib/deliberation/context";
+import type {
+  DeliberationRunDetail,
+  OpportunityDetail
+} from "@/lib/deliberation/contracts";
+import {
+  candidateTypeLabels,
+  finalDecisionActionLabels,
+  productMentionLabels,
+  recommendedActionLabels,
+  responseTypeLabels
+} from "@/lib/labels";
 import { useReydar } from "@/lib/store";
 
-const outcomeOptions = [
-  { label: "Rejected", value: "rejected" },
-  { label: "Saved as insight", value: "saved_as_insight" },
-  { label: "Monitor for follow-up", value: "monitoring" },
-  { label: "Positive reply", value: "positive_reply" },
-  { label: "Negative reply", value: "negative_reply" },
-  { label: "Removed", value: "removed" }
-];
+type DetailStatus = "loading" | "ready" | "error" | "not_found";
 
-export function OpportunityDetailScreen({ opportunityId }: { opportunityId: string }) {
-  const { state, updateOpportunityStatus, logOutcome } = useReydar();
-  const opportunity = state.opportunities.find((item) => item.id === opportunityId);
-  const [outcome, setOutcome] = useState({
-    outcomeType: "saved_as_insight",
-    notes: "",
-    postedUrl: ""
-  });
+export function OpportunityDetailScreen({
+  opportunityId
+}: {
+  opportunityId: string;
+}) {
+  const { activeProject } = useReydar();
+  const { rerunOpportunity } = useDeliberation();
+  const [detail, setDetail] = useState<OpportunityDetail>();
+  const [status, setStatus] = useState<DetailStatus>("loading");
+  const [error, setError] = useState<string>();
+  const [selectedRunId, setSelectedRunId] = useState<string>();
+  const [rerunning, setRerunning] = useState(false);
 
-  if (!opportunity) {
+  const load = async () => {
+    setStatus("loading");
+    setError(undefined);
+    try {
+      const loaded = await loadOpportunityDetail(
+        activeProject.id,
+        opportunityId
+      );
+      setDetail(loaded);
+      setSelectedRunId(
+        loaded.latestRun?.run.id ?? loaded.runs[0]?.run.id
+      );
+      setStatus("ready");
+    } catch (loadError) {
+      setDetail(undefined);
+      const message =
+        loadError instanceof Error
+          ? loadError.message
+          : "The opportunity could not be loaded.";
+      setError(message);
+      setStatus(message.toLowerCase().includes("not found") ? "not_found" : "error");
+    }
+  };
+
+  useEffect(() => {
+    if (activeProject.id) {
+      void load();
+    }
+    // The route identity and selected project fully define this request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject.id, opportunityId]);
+
+  const rerun = async () => {
+    if (!detail) return;
+    setRerunning(true);
+    setError(undefined);
+    try {
+      const result = await rerunOpportunity(detail.opportunity.id);
+      setDetail(result.opportunity);
+      setSelectedRunId(result.opportunity.runs[0]?.run.id);
+    } catch (runError) {
+      setError(
+        runError instanceof Error
+          ? runError.message
+          : "The deliberation could not be re-run."
+      );
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  if (status === "loading") {
     return (
       <EmptyState
-        header="Opportunity not found"
-        description="The selected conversation could not be found in the local workspace."
-        primaryAction={<Button href="/opportunities">Back to inbox</Button>}
+        header="Loading opportunity"
+        description="ReydarOS is loading the persisted candidate and deliberation history."
       />
     );
   }
 
-  const project = state.projects.find((item) => item.id === opportunity.projectId);
-  const drafts = state.responseDrafts.filter((draft) => draft.opportunityId === opportunity.id);
-  const checks = state.guardrailChecks.filter((check) => check.opportunityId === opportunity.id);
-  const insights = state.marketInsights.filter((insight) => insight.opportunityId === opportunity.id);
-  const outcomes = state.engagementOutcomes.filter((item) => item.opportunityId === opportunity.id);
-  const candidates = state.conversationCandidates.filter((candidate) => candidate.opportunityId === opportunity.id);
-  const deliberation = candidates[0] ? state.deliberationRuns.find((run) => run.candidateId === candidates[0].id) : undefined;
-  const agents = deliberation ? state.deliberationAgentResults.filter((agent) => agent.deliberationRunId === deliberation.id) : [];
-  const finalDecision = deliberation ? state.finalDecisions.find((decision) => decision.deliberationRunId === deliberation.id) : undefined;
-  const failedChecks = checks.filter((check) => !check.passed);
+  if (!detail) {
+    return (
+      <EmptyState
+        header={status === "not_found" ? "Opportunity not found" : "Opportunity unavailable"}
+        description={
+          error ??
+          "The selected opportunity could not be loaded from the project workspace."
+        }
+        primaryAction={
+          status === "error" ? (
+            <Button appearance="primary" onClick={() => void load()}>
+              Retry
+            </Button>
+          ) : (
+            <Button href="/opportunities">Back to opportunities</Button>
+          )
+        }
+      />
+    );
+  }
 
-  const submitOutcome = (event: FormEvent) => {
-    event.preventDefault();
-    logOutcome({
-      opportunityId: opportunity.id,
-      responseDraftId: drafts[0]?.id,
-      outcomeType: outcome.outcomeType as never,
-      notes: outcome.notes,
-      postedUrl: outcome.postedUrl
-    });
-  };
+  const { opportunity, candidate, sourceTrail } = detail;
+  const selectedRun: DeliberationRunDetail | undefined =
+    detail.runs.find((item) => item.run.id === selectedRunId) ??
+    detail.latestRun ??
+    detail.runs[0];
 
   return (
     <>
@@ -74,41 +142,69 @@ export function OpportunityDetailScreen({ opportunityId }: { opportunityId: stri
         title={opportunity.threadTitle}
         description={`${opportunity.platform} / ${opportunity.community}`}
         breadcrumbs={[
-          { text: "Review Inbox", href: "/opportunities" },
-          { text: opportunity.threadTitle, href: `/opportunities/${opportunity.id}` }
+          { text: "Opportunities", href: "/opportunities" },
+          {
+            text: opportunity.threadTitle,
+            href: `/opportunities/${opportunity.id}`
+          }
         ]}
-        action={<Button appearance="primary" href={`/response-studio?opportunity=${opportunity.id}`}>Open Review Studio</Button>}
+        action={
+          <Inline space="space.100" shouldWrap>
+            <Button href={`/deliberation?candidate=${candidate.id}`}>
+              Open deliberation
+            </Button>
+            <LoadingButton
+              appearance="primary"
+              isLoading={rerunning}
+              onClick={() => void rerun()}
+            >
+              Re-run decision
+            </LoadingButton>
+          </Inline>
+        }
       />
 
-      {failedChecks.length || opportunity.riskLevel === "high" || opportunity.riskLevel === "blocked" ? (
+      {error ? (
         <Box paddingBlockEnd="space.200">
-          <Banner appearance="warning">Risk warnings are present. Review guardrails before approving any response.</Banner>
+          <Banner appearance="warning">{error}</Banner>
+        </Box>
+      ) : null}
+      {selectedRun?.run.errors.length ? (
+        <Box paddingBlockEnd="space.200">
+          <Banner appearance="warning">
+            {selectedRun.run.errors.join(" ")}
+          </Banner>
         </Box>
       ) : null}
 
       <div className="two-column-workspace">
         <Stack space="space.200">
-          <SectionPanel title="Opportunity analysis">
+          <SectionPanel title="Persisted opportunity trail">
             <Tabs id="opportunity-detail-tabs">
               <TabList>
                 <Tab>Analysis</Tab>
-                <Tab>Candidate Trail</Tab>
+                <Tab>Candidate trail</Tab>
                 <Tab>Deliberation</Tab>
-                <Tab>Drafts</Tab>
-                <Tab>Guardrails</Tab>
-                <Tab>Insights</Tab>
-                <Tab>Learning</Tab>
+                <Tab>Run history</Tab>
               </TabList>
               <TabPanel>
                 <Stack space="space.200">
-                  <SectionMessage appearance="information" title="AI reasoning">
+                  <SectionMessage appearance="information" title="Final reasoning">
                     <p>{opportunity.reasoning}</p>
                   </SectionMessage>
                   <div className="dense-grid">
-                    <SectionPanel title="Original thread details">
+                    <SectionPanel title="Original source">
                       <Stack space="space.100">
-                        <span>{opportunity.threadUrl || "No source URL"}</span>
-                        <TextArea value={opportunity.sourceText} minimumRows={8} isReadOnly />
+                        {sourceTrail.sourceUrl ? (
+                          <Link href={sourceTrail.sourceUrl}>Open source URL</Link>
+                        ) : (
+                          <span className="muted-text">No source URL</span>
+                        )}
+                        <TextArea
+                          value={opportunity.sourceText}
+                          minimumRows={8}
+                          isReadOnly
+                        />
                       </Stack>
                     </SectionPanel>
                     <SectionPanel title="Conversation summary">
@@ -130,59 +226,111 @@ export function OpportunityDetailScreen({ opportunityId }: { opportunityId: stri
                     </SectionPanel>
                     <SectionPanel title="Suggested next step">
                       <Stack space="space.150">
-                        <Inline spread="space-between"><span>Recommended action</span><strong>{recommendedActionLabels[opportunity.recommendedAction]}</strong></Inline>
-                        <Inline spread="space-between"><span>Response type</span><strong>{responseTypeLabels[opportunity.responseType]}</strong></Inline>
-                        <Inline spread="space-between"><span>Product mention</span><strong>{productMentionLabels[opportunity.productMentionLevel]}</strong></Inline>
+                        <Inline spread="space-between">
+                          <span>Recommended action</span>
+                          <strong>
+                            {recommendedActionLabels[opportunity.recommendedAction]}
+                          </strong>
+                        </Inline>
+                        <Inline spread="space-between">
+                          <span>Response type</span>
+                          <strong>
+                            {responseTypeLabels[opportunity.responseType]}
+                          </strong>
+                        </Inline>
+                        <Inline spread="space-between">
+                          <span>Product mention</span>
+                          <strong>
+                            {productMentionLabels[opportunity.productMentionLevel]}
+                          </strong>
+                        </Inline>
                       </Stack>
                     </SectionPanel>
                   </div>
                 </Stack>
               </TabPanel>
               <TabPanel>
-                <Stack space="space.150">
-                  {candidates.length ? (
-                    candidates.map((candidate) => (
-                      <SectionPanel
-                        key={candidate.id}
-                        title={candidate.title}
-                        description={candidate.candidateSummary}
-                        action={<Button href={`/deliberation?candidate=${candidate.id}`}>Inspect decision trail</Button>}
-                      >
-                        <div className="dense-grid">
-                          <Inline spread="space-between"><span>Type</span><strong>{candidateTypeLabels[candidate.candidateType]}</strong></Inline>
-                          <Inline spread="space-between"><span>Status</span><CandidateStatusLozenge value={candidate.status} /></Inline>
-                          <Inline spread="space-between"><span>Intent</span><strong>{candidate.detectedIntent}</strong></Inline>
-                          <Inline spread="space-between"><span>Pain point</span><strong>{candidate.detectedPainPoint}</strong></Inline>
-                          <Inline spread="space-between"><span>Relevance</span><strong>{candidate.initialRelevanceScore}</strong></Inline>
-                          <Inline spread="space-between"><span>Risk</span><strong>{candidate.initialRiskScore}</strong></Inline>
-                        </div>
-                      </SectionPanel>
-                    ))
-                  ) : (
-                    <EmptyState header="No mapped candidates" description="Older fallback opportunities may not have candidate mapping until reanalyzed." />
-                  )}
-                </Stack>
+                <SectionPanel
+                  title={candidate.title}
+                  description={candidate.candidateSummary}
+                  action={
+                    <Button href={`/candidates?candidate=${candidate.id}`}>
+                      Inspect candidate
+                    </Button>
+                  }
+                >
+                  <Stack space="space.150">
+                    <Inline space="space.100" shouldWrap>
+                      <CandidateStatusLozenge value={candidate.status} />
+                      <Badge>{candidateTypeLabels[candidate.candidateType]}</Badge>
+                    </Inline>
+                    <div className="dense-grid">
+                      <Inline spread="space-between">
+                        <span>Project</span>
+                        <strong>{candidate.projectId}</strong>
+                      </Inline>
+                      <Inline spread="space-between">
+                        <span>Discovery run</span>
+                        <strong>{sourceTrail.discoveryRunId ?? "Not linked"}</strong>
+                      </Inline>
+                      <Inline spread="space-between">
+                        <span>Discovered item</span>
+                        <strong>{sourceTrail.discoveredItemId ?? "Not linked"}</strong>
+                      </Inline>
+                      <Inline spread="space-between">
+                        <span>Candidate</span>
+                        <strong>{candidate.id}</strong>
+                      </Inline>
+                      <Inline spread="space-between">
+                        <span>Opportunity</span>
+                        <strong>{opportunity.id}</strong>
+                      </Inline>
+                    </div>
+                  </Stack>
+                </SectionPanel>
               </TabPanel>
               <TabPanel>
-                {deliberation && finalDecision ? (
+                {selectedRun ? (
                   <Stack space="space.150">
-                    <SectionMessage appearance="information" title="Final Judge">
-                      <p>{finalDecision.finalReasoning}</p>
-                    </SectionMessage>
+                    {selectedRun.decision ? (
+                      <SectionMessage appearance="information" title="Final Judge">
+                        <p>{selectedRun.decision.finalReasoning}</p>
+                      </SectionMessage>
+                    ) : null}
                     <div className="dense-grid">
-                      <Inline spread="space-between"><span>Decision</span><strong>{finalDecisionActionLabels[finalDecision.selectedAction]}</strong></Inline>
-                      <Inline spread="space-between"><span>Autonomy</span><AutonomyStatusLozenge value={deliberation.autonomyStatus} /></Inline>
-                      <Inline spread="space-between"><span>Auto-engage allowed</span><strong>{finalDecision.autoEngageAllowed ? "Yes" : "No"}</strong></Inline>
-                      <Inline spread="space-between"><span>Human approval</span><strong>{finalDecision.humanApprovalRequired ? "Required" : "Not required"}</strong></Inline>
+                      <Inline spread="space-between">
+                        <span>Run</span>
+                        <strong>
+                          Revision {selectedRun.run.revision} · {selectedRun.run.status}
+                        </strong>
+                      </Inline>
+                      <Inline spread="space-between">
+                        <span>Decision</span>
+                        <strong>
+                          {selectedRun.decision
+                            ? finalDecisionActionLabels[
+                                selectedRun.decision.selectedAction
+                              ]
+                            : "No decision"}
+                        </strong>
+                      </Inline>
+                      <Inline spread="space-between">
+                        <span>Autonomy</span>
+                        <AutonomyStatusLozenge
+                          value={selectedRun.run.autonomyStatus}
+                        />
+                      </Inline>
                     </div>
-                    <SectionPanel title="Agent debate">
+                    <SectionPanel title="Eight-agent record">
                       <Stack space="space.100">
-                        {agents.map((agent) => (
+                        {selectedRun.agentResults.map((agent) => (
                           <div className="panel-muted" key={agent.id}>
                             <Box padding="space.150">
                               <Inline spread="space-between">
                                 <strong>{agent.agentName}</strong>
-                                <span>{agent.recommendation} · {agent.score}</span>
+                                <span>
+                                  {agent.recommendation} · {agent.score}
+                                </span>
                               </Inline>
                               <p>{agent.reasoning}</p>
                             </Box>
@@ -194,97 +342,31 @@ export function OpportunityDetailScreen({ opportunityId }: { opportunityId: stri
                 ) : (
                   <EmptyState
                     header="No deliberation yet"
-                    description="The autonomous pipeline creates this decision trail when it analyzes a candidate."
-                    primaryAction={candidates[0] ? <Button href={`/deliberation?candidate=${candidates[0].id}`}>Inspect decision trail</Button> : undefined}
+                    description="Start deliberation from the Candidate Map."
                   />
                 )}
               </TabPanel>
               <TabPanel>
-                <Stack space="space.200">
-                  {drafts.map((draft) => (
-                    <SectionPanel
-                      key={draft.id}
-                      title={responseTypeLabels[draft.responseType]}
-                      description={draft.reasoning}
-                      action={<Button href={`/response-studio?opportunity=${opportunity.id}`}>Review in Studio</Button>}
+                <Stack space="space.100">
+                  {detail.runs.map((item) => (
+                    <button
+                      type="button"
+                      className="panel-muted link-button"
+                      key={item.run.id}
+                      onClick={() => setSelectedRunId(item.run.id)}
                     >
-                      <Stack space="space.150">
-                        <Inline space="space.100">
-                          <RiskLozenge value={draft.riskLevel} />
-                          <span className="small-text muted-text">{productMentionLabels[draft.productMentionLevel]}</span>
+                      <Box padding="space.150">
+                        <Inline spread="space-between" shouldWrap>
+                          <strong>Revision {item.run.revision}</strong>
+                          <span>
+                            {item.run.status} ·{" "}
+                            {new Date(item.run.startedAt).toLocaleString()}
+                          </span>
                         </Inline>
-                        <TextArea value={draft.responseText} minimumRows={8} isReadOnly />
-                      </Stack>
-                    </SectionPanel>
+                      </Box>
+                    </button>
                   ))}
                 </Stack>
-              </TabPanel>
-              <TabPanel>
-                <Stack space="space.150">
-                  {checks.map((check) => (
-                    <SectionMessage key={check.id} appearance={check.passed ? "success" : "warning"} title={check.checkType}>
-                      <p>{check.description}</p>
-                    </SectionMessage>
-                  ))}
-                </Stack>
-              </TabPanel>
-              <TabPanel>
-                <Stack space="space.150">
-                  {insights.map((insight) => (
-                    <SectionPanel key={insight.id} title={insight.title} description={insight.category}>
-                      <p>{insight.insight}</p>
-                    </SectionPanel>
-                  ))}
-                </Stack>
-              </TabPanel>
-              <TabPanel>
-                <form onSubmit={submitOutcome}>
-                  <Stack space="space.200">
-                    <Inline space="space.200" shouldWrap>
-                      <div className="form-field">
-                        <Field label="Outcome">
-                          <Select
-                            options={outcomeOptions}
-                            value={outcomeOptions.find((option) => option.value === outcome.outcomeType)}
-                            onChange={(option) => setOutcome((current) => ({ ...current, outcomeType: String(option?.value ?? "saved_as_insight") }))}
-                          />
-                        </Field>
-                      </div>
-                      <div className="form-field-wide">
-                        <Field label="Source or outcome URL" htmlFor="posted-url">
-                          <Textfield
-                            id="posted-url"
-                            value={outcome.postedUrl}
-                            onChange={(event) => setOutcome((current) => ({ ...current, postedUrl: event.currentTarget.value }))}
-                          />
-                        </Field>
-                      </div>
-                    </Inline>
-                    <Field label="Notes" htmlFor="outcome-notes">
-                      <TextArea
-                        id="outcome-notes"
-                        value={outcome.notes}
-                        onChange={(event) => setOutcome((current) => ({ ...current, notes: event.currentTarget.value }))}
-                        minimumRows={4}
-                      />
-                    </Field>
-                    <Button appearance="primary" type="submit">Log outcome</Button>
-                    {outcomes.length ? (
-                      <Stack space="space.100">
-                        {outcomes.map((item) => (
-                          <div className="panel-muted" key={item.id}>
-                            <Box padding="space.150">
-                              <Stack space="space.050">
-                                <strong>{item.outcomeType.replaceAll("_", " ")}</strong>
-                                <span className="muted-text">{item.notes}</span>
-                              </Stack>
-                            </Box>
-                          </div>
-                        ))}
-                      </Stack>
-                    ) : null}
-                  </Stack>
-                </form>
               </TabPanel>
             </Tabs>
           </SectionPanel>
@@ -293,16 +375,30 @@ export function OpportunityDetailScreen({ opportunityId }: { opportunityId: stri
         <aside className="right-panel-sticky">
           <Stack space="space.200">
             <SectionPanel title="Scores">
-              <ScoreList scores={opportunity.scores} />
+              {selectedRun?.score ? (
+                <ScoreList scores={selectedRun.score} />
+              ) : (
+                <p className="muted-text">No score exists for this run.</p>
+              )}
             </SectionPanel>
-            <SectionPanel title="Risk and metadata">
+            <SectionPanel title="Status and metadata">
               <Stack space="space.150">
-                <Inline spread="space-between"><span>Status</span><OpportunityStatusLozenge value={opportunity.status} /></Inline>
-                <Inline spread="space-between"><span>Risk</span><RiskLozenge value={opportunity.riskLevel} /></Inline>
-                <Inline spread="space-between"><span>Intent</span><strong>{opportunity.intentLevel}</strong></Inline>
-                <Inline spread="space-between"><span>Project</span><strong>{project?.name ?? "Unknown"}</strong></Inline>
-                <Button onClick={() => updateOpportunityStatus(opportunity.id, "do_not_reply")}>Mark do not reply</Button>
-                <Button appearance="primary" onClick={() => updateOpportunityStatus(opportunity.id, "approved")}>Approve exception</Button>
+                <Inline spread="space-between">
+                  <span>Opportunity</span>
+                  <OpportunityStatusLozenge value={opportunity.status} />
+                </Inline>
+                <Inline spread="space-between">
+                  <span>Risk</span>
+                  <RiskLozenge value={opportunity.riskLevel} />
+                </Inline>
+                <Inline spread="space-between">
+                  <span>Intent</span>
+                  <strong>{opportunity.intentLevel}</strong>
+                </Inline>
+                <Inline spread="space-between">
+                  <span>Run count</span>
+                  <strong>{detail.runs.length}</strong>
+                </Inline>
               </Stack>
             </SectionPanel>
           </Stack>

@@ -415,16 +415,42 @@ async function main() {
     });
   }
 
+  const linkedOpportunityIds = new Set<string>();
+  for (const candidate of initialState.conversationCandidates) {
+    if (!candidate.opportunityId || linkedOpportunityIds.has(candidate.opportunityId)) continue;
+    linkedOpportunityIds.add(candidate.opportunityId);
+    await prisma.opportunity.update({
+      where: { id: candidate.opportunityId },
+      data: { candidateId: candidate.id }
+    });
+  }
+
+  const opportunityRevisions = new Map<string, number>();
   for (const run of initialState.deliberationRuns) {
+    const opportunityId = initialState.conversationCandidates.find(
+      (candidate) => candidate.id === run.candidateId
+    )?.opportunityId;
+    if (!opportunityId) continue;
+    const revision = (opportunityRevisions.get(opportunityId) ?? 0) + 1;
+    opportunityRevisions.set(opportunityId, revision);
     await prisma.deliberationRun.create({
       data: {
         id: run.id,
         projectId: run.projectId,
+        opportunityId,
         candidateId: run.candidateId,
+        revision,
+        requestId: `seed-${run.id}`,
         status: deliberationStatus(run.status),
         finalDecision: finalDecisionAction(run.finalDecision),
         finalConfidence: run.finalConfidence,
         autonomyStatus: autonomyStatus(run.autonomyStatus),
+        startedAt: new Date(run.createdAt),
+        completedAt:
+          run.status === "completed" || run.status === "failed" || run.status === "blocked"
+            ? new Date(run.updatedAt)
+            : undefined,
+        errors: [],
         createdAt: new Date(run.createdAt),
         updatedAt: new Date(run.updatedAt)
       }

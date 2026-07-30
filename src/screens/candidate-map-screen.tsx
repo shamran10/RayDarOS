@@ -2,9 +2,10 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Badge from "@atlaskit/badge";
-import Button from "@atlaskit/button";
+import Banner from "@atlaskit/banner";
+import Button, { LoadingButton } from "@atlaskit/button";
 import DynamicTable from "@atlaskit/dynamic-table";
 import EmptyState from "@atlaskit/empty-state";
 import Select from "@/components/apple-select";
@@ -14,6 +15,7 @@ import { DiscoveryLoadState } from "@/components/discovery-load-state";
 import { PageHeading } from "@/components/page-heading";
 import { SectionPanel } from "@/components/section-panel";
 import { CandidateStatusLozenge } from "@/components/status-lozenge";
+import { useDeliberation } from "@/lib/deliberation/context";
 import { useDiscovery } from "@/lib/discovery/context";
 import { candidateTypeLabels } from "@/lib/labels";
 import { useReydar } from "@/lib/store";
@@ -30,14 +32,22 @@ const statusOptions = [
 ].map((value) => ({ label: value === "all" ? "All statuses" : value.replaceAll("_", " "), value }));
 
 export function CandidateMapScreen() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { activeProject } = useReydar();
   const { snapshot, status, error, retry } = useDiscovery();
+  const {
+    opportunities,
+    startCandidate,
+    status: deliberationStatus
+  } = useDeliberation();
   const [statusFilter, setStatusFilter] = useState<CandidateStatus | "all">("all");
   const [typeFilter, setTypeFilter] = useState<CandidateType | "all">("all");
   const [selectedId, setSelectedId] = useState<string | undefined>(
     searchParams.get("candidate") ?? undefined
   );
+  const [runningCandidateId, setRunningCandidateId] = useState<string>();
+  const [deliberationError, setDeliberationError] = useState<string>();
   const candidates = snapshot.conversationCandidates.filter(
     (candidate) => candidate.projectId === activeProject.id
   );
@@ -58,12 +68,39 @@ export function CandidateMapScreen() {
     { label: "All candidate types", value: "all" },
     ...Object.entries(candidateTypeLabels).map(([value, label]) => ({ label, value }))
   ];
+  const opportunityByCandidate = new Map(
+    opportunities.map((item) => [item.candidate.id, item])
+  );
+
+  const deliberate = async (candidateId: string) => {
+    const existing = opportunityByCandidate.get(candidateId);
+    if (existing) {
+      router.push(`/opportunities/${existing.opportunity.id}`);
+      return;
+    }
+
+    setRunningCandidateId(candidateId);
+    setDeliberationError(undefined);
+    try {
+      const result = await startCandidate(candidateId);
+      await retry();
+      router.push(`/opportunities/${result.opportunity.opportunity.id}`);
+    } catch (runError) {
+      setDeliberationError(
+        runError instanceof Error
+          ? runError.message
+          : "Deliberation could not be started."
+      );
+    } finally {
+      setRunningCandidateId(undefined);
+    }
+  };
 
   return (
     <>
       <PageHeading
         title="Candidate Map Debug"
-        description="Inspect database-backed candidate mappings before Phase 3 deliberation is connected."
+        description="Inspect persisted candidate mappings and start deterministic deliberation."
         breadcrumbs={[{ text: "ReydarOS", href: "/" }, { text: "Candidate Map Debug", href: "/candidates" }]}
         action={<Button appearance="primary" href="/signal-discovery">Run autonomous pipeline</Button>}
       />
@@ -71,6 +108,11 @@ export function CandidateMapScreen() {
       <Box paddingBlockEnd="space.200">
         <DiscoveryLoadState status={status} error={error} retry={retry} />
       </Box>
+      {deliberationError ? (
+        <Box paddingBlockEnd="space.200">
+          <Banner appearance="warning">{deliberationError}</Banner>
+        </Box>
+      ) : null}
 
       <div className="two-column-workspace">
         <Stack space="space.200">
@@ -136,7 +178,19 @@ export function CandidateMapScreen() {
                       content: (
                         <Inline space="space.050" shouldWrap>
                           <Button onClick={() => setSelectedId(candidate.id)}>Inspect</Button>
-                          <Button isDisabled>Deliberation in Phase 3</Button>
+                          <LoadingButton
+                            appearance="primary"
+                            isDisabled={
+                              deliberationStatus !== "ready" ||
+                              Boolean(runningCandidateId)
+                            }
+                            isLoading={runningCandidateId === candidate.id}
+                            onClick={() => void deliberate(candidate.id)}
+                          >
+                            {opportunityByCandidate.has(candidate.id)
+                              ? "Open opportunity"
+                              : "Start deliberation"}
+                          </LoadingButton>
                         </Inline>
                       )
                     }
@@ -178,9 +232,19 @@ export function CandidateMapScreen() {
                   <p>{selected.recommendedNextStep}</p>
                   <p className="muted-text">{selected.whyWorthAnalyzing}</p>
                   <Inline space="space.100" shouldWrap>
-                    <Button appearance="primary" isDisabled>
-                      Deliberation in Phase 3
-                    </Button>
+                    <LoadingButton
+                      appearance="primary"
+                      isDisabled={
+                        deliberationStatus !== "ready" ||
+                        Boolean(runningCandidateId)
+                      }
+                      isLoading={runningCandidateId === selected.id}
+                      onClick={() => void deliberate(selected.id)}
+                    >
+                      {opportunityByCandidate.has(selected.id)
+                        ? "Open opportunity"
+                        : "Start deliberation"}
+                    </LoadingButton>
                   </Inline>
                   {selected.url ? <Link href={selected.url}>Open source URL</Link> : null}
                 </Stack>

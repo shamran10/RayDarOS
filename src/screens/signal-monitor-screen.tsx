@@ -130,7 +130,7 @@ export function SignalMonitorScreen() {
           </SectionMessage>
         ) : null}
         <Banner appearance="warning">
-          Manual intake persists a discovery run, discovered item, and mapped candidate. It does not run deliberation or drafting in Phase 2.
+          Manual intake persists a discovery run, discovered item, and mapped candidate. It does not automatically run deliberation or drafting.
         </Banner>
       </Box>
 

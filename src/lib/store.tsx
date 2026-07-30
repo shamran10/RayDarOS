@@ -1,8 +1,6 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { createAutonomousActionLog } from "@/lib/autonomy/autonomous-action-service";
-import { runCandidateDeliberation } from "@/lib/deliberation/deliberation-service";
 import { createMemoryInsightFromOutcome } from "@/lib/memory/memory-service";
 import {
   createCommunityRuleRecord,
@@ -26,17 +24,13 @@ import type {
   AutonomyPolicy,
   CandidateStatus,
   CommunityRule,
-  ConversationCandidate,
   DraftStatus,
   EngagementOutcome,
-  FinalDecision,
   KnowledgeItem,
   MarketInsight,
-  Opportunity,
   OpportunityStatus,
   Project,
   ReydarState,
-  ResponseDraft
 } from "@/lib/types";
 
 const STORAGE_KEY = "reydaros.mvp.state.v1";
@@ -88,7 +82,6 @@ interface StoreContextValue {
     rule: Omit<CommunityRule, "id" | "createdAt" | "updatedAt">
   ) => Promise<CommunityRule>;
   updateCommunityRule: (ruleId: string, patch: Partial<CommunityRule>) => Promise<CommunityRule>;
-  runDeliberationForCandidate: (candidateId: string) => Promise<string | undefined>;
   updateCandidateStatus: (candidateId: string, status: CandidateStatus) => void;
   updateAutonomyPolicy: (policyId: string, patch: Partial<AutonomyPolicy>) => void;
   updateOpportunityStatus: (opportunityId: string, status: OpportunityStatus) => void;
@@ -202,99 +195,6 @@ function communityRuleUpdateInput(patch: Partial<CommunityRule>): CommunityRuleU
   return input;
 }
 
-function riskFromScores(score: { promotionRiskScore: number; communityRiskScore: number }): Opportunity["riskLevel"] {
-  if (score.promotionRiskScore >= 75 || score.communityRiskScore >= 75) return "high";
-  if (score.promotionRiskScore >= 42 || score.communityRiskScore >= 42) return "medium";
-  return "low";
-}
-
-function recommendedActionFromDecision(decision: FinalDecision): Opportunity["recommendedAction"] {
-  if (decision.selectedAction === "clarifying_question") return "clarifying_question";
-  if (decision.selectedAction === "soft_product_mention") return "helpful_with_soft_disclosure";
-  if (decision.selectedAction === "product_recommendation_with_disclosure") return "product_recommendation_with_disclosure";
-  if (decision.selectedAction === "save_as_market_insight") return "save_as_market_insight";
-  if (decision.selectedAction === "monitor_only") return "monitor_for_follow_up";
-  if (decision.selectedAction === "do_not_engage") return "do_not_reply";
-  return "helpful_answer_only";
-}
-
-function statusFromAutonomy(decision: FinalDecision, status: string): OpportunityStatus {
-  if (status === "blocked" || decision.selectedAction === "do_not_engage") return "do_not_reply";
-  if (status === "save_as_insight_only" || decision.selectedAction === "save_as_market_insight") return "saved_as_insight";
-  if (status === "monitor_only") return "analyzed";
-  return "awaiting_review";
-}
-
-function createOpportunityFromCandidate(
-  candidate: ConversationCandidate,
-  decision: FinalDecision,
-  score: ReturnType<typeof runCandidateDeliberation>["score"]
-): Opportunity {
-  return {
-    id: makeId("opp-auto"),
-    projectId: candidate.projectId,
-    platform: candidate.platform,
-    community: candidate.community,
-    threadTitle: candidate.title,
-    threadUrl: candidate.url,
-    sourceText: candidate.body,
-    conversationSummary: candidate.candidateSummary,
-    userProblem: `The candidate signals ${candidate.detectedPainPoint.toLowerCase()} and ${candidate.detectedIntent.toLowerCase()}.`,
-    painPoint: candidate.detectedPainPoint,
-    audienceMatch: "Audience fit is inferred from project discovery configuration and market knowledge.",
-    productFitExplanation:
-      decision.productMentionLevel === 0
-        ? "Product fit exists only at the category/problem level, so the safer route is helpful-only engagement."
-        : "Product fit is plausible, but any affiliation must be disclosed and policy-gated.",
-    intentLevel: score.intentScore >= 75 ? "high" : score.intentScore >= 55 ? "medium" : "low",
-    riskLevel: riskFromScores(score),
-    recommendedAction: recommendedActionFromDecision(decision),
-    responseType: decision.selectedResponseType,
-    productMentionLevel: decision.productMentionLevel,
-    reasoning: decision.finalReasoning,
-    status: statusFromAutonomy(decision, decision.autoEngageAllowed ? "safe_to_auto_engage" : "needs_human_approval"),
-    scores: {
-      relevanceScore: score.relevanceScore,
-      intentScore: score.intentScore,
-      productFitScore: score.productFitScore,
-      engagementValueScore: score.engagementValueScore,
-      promotionRiskScore: score.promotionRiskScore,
-      communityRiskScore: score.communityRiskScore,
-      accountSafetyScore: score.accountSafetyScore,
-      responseConfidenceScore: score.responseConfidenceScore
-    },
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-}
-
-function createDraftFromFinalDecision(
-  opportunityId: string,
-  candidate: ConversationCandidate,
-  runId: string,
-  decision: FinalDecision
-): ResponseDraft | undefined {
-  if (!decision.approvedDraft.trim()) return undefined;
-
-  return {
-    id: makeId("draft-auto"),
-    opportunityId,
-    candidateId: candidate.id,
-    deliberationRunId: runId,
-    finalDecisionId: decision.id,
-    responseText: decision.approvedDraft,
-    responseType: decision.selectedResponseType,
-    productMentionLevel: decision.productMentionLevel,
-    disclosureIncluded: decision.requiresDisclosure,
-    riskLevel: decision.blockedReason ? "high" : decision.productMentionLevel >= 2 ? "medium" : "low",
-    reasoning: decision.finalReasoning,
-    status: "draft",
-    editedByUser: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-}
-
 function withoutServerPersistedData(state: ReydarState): ReydarState {
   return {
     ...state,
@@ -327,10 +227,13 @@ function loadState() {
       discoveryRuns: [],
       discoveredItems: [],
       conversationCandidates: [],
-      deliberationRuns: parsed.deliberationRuns ?? initialState.deliberationRuns,
-      deliberationAgentResults: parsed.deliberationAgentResults ?? initialState.deliberationAgentResults,
-      candidateScores: parsed.candidateScores ?? initialState.candidateScores,
-      finalDecisions: parsed.finalDecisions ?? initialState.finalDecisions,
+      // Phase 4 local screens keep their seeded compatibility graph, but
+      // Phase 3 records are never imported from browser persistence.
+      opportunities: initialState.opportunities,
+      deliberationRuns: initialState.deliberationRuns,
+      deliberationAgentResults: initialState.deliberationAgentResults,
+      candidateScores: initialState.candidateScores,
+      finalDecisions: initialState.finalDecisions,
       autonomyPolicies: parsed.autonomyPolicies ?? initialState.autonomyPolicies,
       autonomousActionLogs: parsed.autonomousActionLogs ?? initialState.autonomousActionLogs
     } as ReydarState;
@@ -361,6 +264,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     delete localState.discoveryRuns;
     delete localState.discoveredItems;
     delete localState.conversationCandidates;
+    delete localState.opportunities;
+    delete localState.deliberationRuns;
+    delete localState.deliberationAgentResults;
+    delete localState.candidateScores;
+    delete localState.finalDecisions;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(localState));
   }, [localStateLoaded, state]);
 
@@ -528,92 +436,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [state.communityRules]
   );
 
-  const runDeliberationForCandidate = useCallback<StoreContextValue["runDeliberationForCandidate"]>(
-    async (candidateId) => {
-      const candidate = state.conversationCandidates.find((item) => item.id === candidateId);
-      if (!candidate) return undefined;
-      const project = state.projects.find((item) => item.id === candidate.projectId) ?? state.projects[0];
-      const result = runCandidateDeliberation({
-        candidate,
-        project,
-        productKnowledge: state.productKnowledge.filter((item) => item.projectId === project.id),
-        marketKnowledge: state.marketKnowledge.filter((item) => item.projectId === project.id),
-        communityRules: state.communityRules.filter((item) => item.projectId === project.id),
-        autonomyPolicies: state.autonomyPolicies.filter((item) => item.projectId === project.id)
-      });
-      const nextCandidateStatus: CandidateStatus =
-        result.run.autonomyStatus === "safe_to_auto_engage"
-          ? "safe_to_auto_engage"
-          : result.run.autonomyStatus === "blocked"
-            ? "blocked"
-            : result.run.autonomyStatus === "monitor_only"
-              ? "monitor_only"
-              : result.run.autonomyStatus === "save_as_insight_only"
-                ? "saved_as_insight"
-                : "queued_for_approval";
-      const opportunity =
-        candidate.opportunityId && state.opportunities.some((item) => item.id === candidate.opportunityId)
-          ? undefined
-          : createOpportunityFromCandidate(candidate, result.finalDecision, result.score);
-      const opportunityId = candidate.opportunityId ?? opportunity?.id;
-      const draft = opportunityId
-        ? createDraftFromFinalDecision(opportunityId, candidate, result.run.id, result.finalDecision)
-        : undefined;
-      const actionLog = createAutonomousActionLog({
-        project,
-        candidate,
-        run: result.run,
-        finalDecision: result.finalDecision,
-        policies: state.autonomyPolicies,
-        communityRules: state.communityRules
-      });
-
-      setState((current) => ({
-        ...current,
-        conversationCandidates: current.conversationCandidates.map((item) =>
-          item.id === candidate.id
-            ? { ...item, status: nextCandidateStatus, opportunityId, updatedAt: new Date().toISOString() }
-            : item
-        ),
-        opportunities: opportunity ? [opportunity, ...current.opportunities] : current.opportunities,
-        responseDrafts: draft ? [draft, ...current.responseDrafts] : current.responseDrafts,
-        deliberationRuns: [result.run, ...current.deliberationRuns.filter((item) => item.candidateId !== candidate.id)],
-        deliberationAgentResults: [
-          ...result.agentResults,
-          ...current.deliberationAgentResults.filter(
-            (item) => !current.deliberationRuns.some((run) => run.candidateId === candidate.id && run.id === item.deliberationRunId)
-          )
-        ],
-        candidateScores: [result.score, ...current.candidateScores.filter((item) => item.candidateId !== candidate.id)],
-        finalDecisions: [result.finalDecision, ...current.finalDecisions.filter((item) => item.candidateId !== candidate.id)],
-        autonomousActionLogs: [actionLog, ...current.autonomousActionLogs],
-        activityLogs: [
-          {
-            id: makeId("activity"),
-            projectId: project.id,
-            entityType: "DeliberationRun",
-            entityId: result.run.id,
-            action: "deliberation.completed",
-            message: `Deliberation completed for ${candidate.title}.`,
-            createdAt: new Date().toISOString()
-          },
-          ...current.activityLogs
-        ]
-      }));
-
-      return result.run.id;
-    },
-    [
-      state.autonomyPolicies,
-      state.communityRules,
-      state.conversationCandidates,
-      state.marketKnowledge,
-      state.opportunities,
-      state.productKnowledge,
-      state.projects
-    ]
-  );
-
   const updateOpportunityStatus = useCallback<StoreContextValue["updateOpportunityStatus"]>((opportunityId, status) => {
     setState((current) => ({
       ...current,
@@ -751,7 +573,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       updateKnowledge,
       addCommunityRule,
       updateCommunityRule,
-      runDeliberationForCandidate,
       updateCandidateStatus,
       updateAutonomyPolicy,
       updateOpportunityStatus,
@@ -773,7 +594,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       logOutcome,
       resetDemoData,
       retryProjectBrain,
-      runDeliberationForCandidate,
       saveInsight,
       setActiveProjectId,
       setDraftStatus,
