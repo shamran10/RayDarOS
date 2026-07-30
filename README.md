@@ -1,6 +1,6 @@
 # ReydarOS
 
-Last updated: 2026-05-07
+Last updated: 2026-07-30
 
 ReydarOS is an autonomous engagement intelligence operating system for finding, evaluating, drafting, governing, and auditing community engagement opportunities. The product is now autonomous-first: source scans create candidates, deliberation runs, policy decisions, drafts, review exceptions, market memory, and audit records without requiring an operator to manually move each item through the system.
 
@@ -31,6 +31,8 @@ The default ReydarOS flow is:
 7. `Review Studio` lets the operator edit, approve, reject, or save learning from drafts.
 8. `Audit Log` preserves traceability from source signal to candidate, deliberation, final decision, policy snapshot, and action state.
 
+Projects, Product Knowledge, Market Knowledge, and Community Rules now use a typed server-side Project Brain service backed by Prisma/PostgreSQL. The browser never receives Prisma or organization ownership fields. The remaining MVP workflow modules continue to use React Context and browser `localStorage` temporarily; their local state is intentionally kept separate from the four database-backed Project Brain collections.
+
 Manual screens are no longer part of the default operating loop. They remain available only as admin/debug fallbacks from Settings.
 
 ## Features
@@ -45,6 +47,9 @@ Manual screens are no longer part of the default operating loop. They remain ava
 - Review Studio for draft editing, approval, rejection, and market-memory capture
 - Audit Log for autonomous and semi-autonomous action traceability
 - Market Memory, analytics, project management, knowledge base, and community rules
+- Database-backed CRUD for Projects, Product Knowledge, Market Knowledge, and Community Rules, with Zod validation and workspace ownership enforced on the server
+- Explicit Project Brain loading, empty, validation, and database-failure states with retry support
+- Accessible application-owned dialogs for Create/Edit Project, Product Knowledge, Market Knowledge, Community Rules, and Add Source, with focus management, Escape/overlay close, and body scroll locking
 - Project Brain row-card overview for knowledge health, signal coverage, response settings, and recent memory
 - Admin/debug fallbacks for manual intake, candidate inspection, deliberation inspection, and legacy approval review
 
@@ -102,15 +107,26 @@ Generate the Prisma client:
 npm run prisma:generate
 ```
 
-Run database migrations:
+Create or update a clean development database with committed migrations:
 
 ```bash
 npm run db:migrate
 ```
 
-Seed local data:
+For a deployment environment, apply committed migrations non-interactively:
 
 ```bash
+npm run db:migrate:deploy
+```
+
+The committed initial migration is the source of truth; do not substitute `prisma db push`. If a database was provisioned from `prisma/schema.prisma` before migration history existed, verify that its schema exactly matches the initial migration, then explicitly baseline it with Prisma Migrate before running `migrate deploy`. Never mark an unverified database as migrated.
+
+The demo seed is destructive and is optional. It refuses production, requires `DATABASE_URL`, and runs only when `ALLOW_DESTRUCTIVE_SEED=true` is explicitly set against a disposable development database. Do not run it against shared or valuable data.
+
+PowerShell:
+
+```powershell
+$env:ALLOW_DESTRUCTIVE_SEED="true"
 npm run db:seed
 ```
 
@@ -130,8 +146,9 @@ Open the app at `http://localhost:3000`. If that port is occupied, Next.js will 
 - `npm run lint` - run Next.js linting
 - `npm run typecheck` - run TypeScript checks
 - `npm run prisma:generate` - generate the Prisma client
-- `npm run db:migrate` - run Prisma migrations
-- `npm run db:seed` - seed the database
+- `npm run db:migrate` - create/apply development migrations with `prisma migrate dev`
+- `npm run db:migrate:deploy` - apply committed migrations in deployment environments
+- `npm run db:seed` - destructively seed an explicitly opted-in disposable development database
 
 ## Project Structure
 
@@ -140,7 +157,7 @@ src/app/          Next.js app routes
 src/components/   Shared UI components
 src/lib/          Domain services, data helpers, Prisma client, and types
 src/screens/      Screen-level React components
-prisma/           Prisma schema and seed data
+prisma/           Prisma schema, committed migrations, and guarded demo seed
 DESIGN.md         Visual design system notes
 ```
 
@@ -161,6 +178,19 @@ DESIGN.md         Visual design system notes
 - `/analytics` - analytics
 - `/settings` - settings and admin/debug fallbacks
 
+Project Brain API routes:
+
+- `GET /api/project-brain` - load the current workspace snapshot
+- `GET/PATCH/DELETE /api/project-brain/organization` - manage the server-selected workspace organization; deletion is blocked while it owns projects
+- `GET/POST /api/project-brain/projects` - list and create projects
+- `GET/PATCH/DELETE /api/project-brain/projects/[projectId]` - read, update, or delete an owned project
+- `GET/POST /api/project-brain/projects/[projectId]/product-knowledge` - list and create product knowledge
+- `GET/PATCH/DELETE /api/project-brain/projects/[projectId]/product-knowledge/[itemId]` - read, update, or delete owned product knowledge
+- `GET/POST /api/project-brain/projects/[projectId]/market-knowledge` - list and create market knowledge
+- `GET/PATCH/DELETE /api/project-brain/projects/[projectId]/market-knowledge/[itemId]` - read, update, or delete owned market knowledge
+- `GET/POST /api/project-brain/projects/[projectId]/community-rules` - list and create community rules
+- `GET/PATCH/DELETE /api/project-brain/projects/[projectId]/community-rules/[ruleId]` - read, update, or delete owned community rules
+
 ## Admin and Debug Fallbacks
 
 These routes are intentionally demoted from the primary navigation. They should be used for recovery, inspection, provider testing, or debugging older records.
@@ -172,6 +202,79 @@ These routes are intentionally demoted from the primary navigation. They should 
 - `/guardrails` - guardrail results
 
 ## Change Log
+
+### 2026-07-30 Remaining Project Brain Dialog Repair
+
+- Replaced the remaining Atlaskit modal portal surfaces in Product Knowledge, Market Knowledge, and Community Rules with the shared application-owned dialog.
+- Preserved the existing Project Brain create/update API calls, validation and failure feedback, while restoring add and edit visibility, safe cancellation, and close-after-success behavior.
+- Kept unrelated workflow surfaces unchanged; Community Rules exposes its edit action directly while retaining the existing risk-action menu.
+
+Main files touched:
+
+- `src/screens/knowledge-base-screen.tsx`
+- `src/screens/community-rules-screen.tsx`
+- `README.md`
+
+### 2026-07-30 Shared Modal Visibility Repair
+
+- Replaced the broken Atlaskit portal surfaces used by Create/Edit Project and Add Source with a small shared application-owned dialog.
+- Added a fixed full-screen blanket, explicit layering, accessible dialog semantics, focus restoration and trapping, Escape/overlay close, and body scroll locking.
+- Removed the animation-frame portal refresh workaround; existing Project Brain API submission and local Signal Source state behavior remain unchanged.
+
+Main files touched:
+
+- `src/components/app-dialog.tsx`
+- `src/screens/projects-screen.tsx`
+- `src/screens/signal-discovery-screen.tsx`
+- `src/app/globals.css`
+- `README.md`
+
+### 2026-07-27 Project Brain Neon Connection Repair
+
+- Aligned `prisma`, `@prisma/client`, and `@prisma/adapter-pg` at `7.9.0`.
+- Reused one PostgreSQL pool and one Prisma client across Next.js development hot reloads, with explicit connection and idle timeouts.
+- Replaced the read-only Project Brain snapshot transaction with concurrent independent reads, avoiding unnecessary transaction acquisition through the Neon pooled connection.
+- Preserved transactional boundaries for future atomic multi-record writes; no schema, migration, seed, or API contract changes were made.
+
+Main files touched:
+
+- `package.json`
+- `package-lock.json`
+- `src/lib/prisma.ts`
+- `src/lib/project-brain/service.ts`
+- `README.md`
+
+### 2026-07-24 Atlaskit Modal Rendering Repair
+
+- Restored Create/Edit Project and Add Source modal visibility under React Strict Mode by locally refreshing the affected Atlaskit portal after its initial mount.
+- Project modal transitions now receive exactly one stable keyed modal child, Cancel buttons are non-submitting, and existing async validation/error behavior remains unchanged.
+- Signal Sources continue to use the local MVP store.
+
+Main files touched:
+
+- `src/screens/projects-screen.tsx`
+- `src/screens/signal-discovery-screen.tsx`
+- `README.md`
+
+### 2026-07-24 Project Brain Persistence Foundation
+
+- Moved Projects, Product Knowledge, Market Knowledge, and Community Rules from browser persistence to typed App Router APIs backed by Prisma/PostgreSQL.
+- Added strict Zod mutation validation, consistent API success/error envelopes, fixed-workspace ownership enforcement, and database loading/failure states.
+- Kept discovery, candidates, deliberation, autonomy, drafts, analytics, action logs, and memory on the temporary local MVP store boundary.
+- Added the initial Prisma migration and deployment migration script; `prisma db push` is not part of the workflow.
+- Guarded the destructive demo seed behind explicit disposable-database opt-in and corrected dependency deletion order.
+
+Main files touched:
+
+- `prisma/migrations/20260724000000_initial_schema/migration.sql`
+- `prisma/seed.ts`
+- `src/lib/project-brain/`
+- `src/app/api/project-brain/`
+- `src/lib/store.tsx`
+- `src/screens/projects-screen.tsx`
+- `src/screens/knowledge-base-screen.tsx`
+- `src/screens/community-rules-screen.tsx`
+- `README.md`
 
 ### 2026-05-07 GitHub Repository Setup
 

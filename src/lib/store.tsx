@@ -8,6 +8,23 @@ import { runCandidateDeliberation } from "@/lib/deliberation/deliberation-servic
 import { runDiscoverySource } from "@/lib/discovery/discovery-service";
 import { createManualDiscoveredItem } from "@/lib/discovery/providers/manual-provider";
 import { createMemoryInsightFromOutcome } from "@/lib/memory/memory-service";
+import {
+  createCommunityRuleRecord,
+  createKnowledgeRecord,
+  createProjectRecord,
+  loadProjectBrain,
+  updateCommunityRuleRecord,
+  updateKnowledgeRecord,
+  updateProjectRecord
+} from "@/lib/project-brain/client";
+import type {
+  CommunityRuleCreateInput,
+  CommunityRuleUpdateInput,
+  KnowledgeCreateInput,
+  KnowledgeUpdateInput,
+  ProjectCreateInput,
+  ProjectUpdateInput
+} from "@/lib/project-brain/contracts";
 import { initialState } from "@/lib/seed-data";
 import type {
   AnalysisInput,
@@ -29,19 +46,54 @@ import type {
 } from "@/lib/types";
 
 const STORAGE_KEY = "reydaros.mvp.state.v1";
+const EMPTY_PROJECT: Project = {
+  id: "",
+  name: "No project configured",
+  productType: "",
+  productDescription: "",
+  primaryObjective: "",
+  engagementGoal: "",
+  brandAccountName: "",
+  websiteUrl: "",
+  targetAudience: "",
+  defaultTone: "",
+  productMentionPolicy: "",
+  riskTolerance: "low",
+  status: "paused",
+  connectedAccount: "Not connected",
+  createdAt: "",
+  updatedAt: ""
+};
+
+type ProjectBrainStatus = "loading" | "ready" | "error";
 
 interface StoreContextValue {
   state: ReydarState;
   activeProject: Project;
+  projectBrainStatus: ProjectBrainStatus;
+  projectBrainError?: string;
+  retryProjectBrain: () => Promise<void>;
   setActiveProjectId: (projectId: string) => void;
-  createProject: (project: Omit<Project, "id" | "createdAt" | "updatedAt" | "status" | "connectedAccount">) => void;
-  updateProject: (projectId: string, patch: Partial<Project>) => void;
-  archiveProject: (projectId: string) => void;
-  addProductKnowledge: (item: Omit<KnowledgeItem, "id" | "createdAt" | "updatedAt">) => void;
-  addMarketKnowledge: (item: Omit<KnowledgeItem, "id" | "createdAt" | "updatedAt">) => void;
-  updateKnowledge: (kind: "product" | "market", itemId: string, patch: Partial<KnowledgeItem>) => void;
-  addCommunityRule: (rule: Omit<CommunityRule, "id" | "createdAt" | "updatedAt">) => void;
-  updateCommunityRule: (ruleId: string, patch: Partial<CommunityRule>) => void;
+  createProject: (
+    project: Omit<Project, "id" | "createdAt" | "updatedAt" | "status" | "connectedAccount">
+  ) => Promise<Project>;
+  updateProject: (projectId: string, patch: Partial<Project>) => Promise<Project>;
+  archiveProject: (projectId: string) => Promise<Project>;
+  addProductKnowledge: (
+    item: Omit<KnowledgeItem, "id" | "createdAt" | "updatedAt">
+  ) => Promise<KnowledgeItem>;
+  addMarketKnowledge: (
+    item: Omit<KnowledgeItem, "id" | "createdAt" | "updatedAt">
+  ) => Promise<KnowledgeItem>;
+  updateKnowledge: (
+    kind: "product" | "market",
+    itemId: string,
+    patch: Partial<KnowledgeItem>
+  ) => Promise<KnowledgeItem>;
+  addCommunityRule: (
+    rule: Omit<CommunityRule, "id" | "createdAt" | "updatedAt">
+  ) => Promise<CommunityRule>;
+  updateCommunityRule: (ruleId: string, patch: Partial<CommunityRule>) => Promise<CommunityRule>;
   createSignalSource: (source: Omit<SignalSource, "id" | "createdAt" | "updatedAt" | "lastScannedAt">) => void;
   updateSignalSource: (sourceId: string, patch: Partial<SignalSource>) => void;
   runSignalDiscovery: (sourceId: string) => Promise<void>;
@@ -61,6 +113,104 @@ interface StoreContextValue {
 const StoreContext = createContext<StoreContextValue | null>(null);
 
 const makeId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+function projectCreateInput(
+  project: Omit<Project, "id" | "createdAt" | "updatedAt" | "status" | "connectedAccount">
+): ProjectCreateInput {
+  if (project.riskTolerance === "blocked") {
+    throw new Error("Blocked is not a valid project risk tolerance.");
+  }
+  return { ...project, riskTolerance: project.riskTolerance };
+}
+
+function projectUpdateInput(patch: Partial<Project>): ProjectUpdateInput {
+  const input: ProjectUpdateInput = {};
+  if (patch.name !== undefined) input.name = patch.name;
+  if (patch.productType !== undefined) input.productType = patch.productType;
+  if (patch.productDescription !== undefined) input.productDescription = patch.productDescription;
+  if (patch.primaryObjective !== undefined) input.primaryObjective = patch.primaryObjective;
+  if (patch.engagementGoal !== undefined) input.engagementGoal = patch.engagementGoal;
+  if (patch.brandAccountName !== undefined) input.brandAccountName = patch.brandAccountName;
+  if (patch.websiteUrl !== undefined) input.websiteUrl = patch.websiteUrl;
+  if (patch.targetAudience !== undefined) input.targetAudience = patch.targetAudience;
+  if (patch.defaultTone !== undefined) input.defaultTone = patch.defaultTone;
+  if (patch.productMentionPolicy !== undefined) input.productMentionPolicy = patch.productMentionPolicy;
+  if (patch.riskTolerance !== undefined && patch.riskTolerance !== "blocked") {
+    input.riskTolerance = patch.riskTolerance;
+  }
+  if (patch.status !== undefined) input.status = patch.status;
+  return input;
+}
+
+function knowledgeCreateInput(
+  item: Omit<KnowledgeItem, "id" | "createdAt" | "updatedAt">
+): KnowledgeCreateInput {
+  return {
+    category: item.category,
+    title: item.title,
+    content: item.content,
+    source: item.source,
+    status: item.status,
+    health: item.health,
+    confidence: item.confidence
+  };
+}
+
+function knowledgeUpdateInput(patch: Partial<KnowledgeItem>): KnowledgeUpdateInput {
+  const input: KnowledgeUpdateInput = {};
+  if (patch.category !== undefined) input.category = patch.category;
+  if (patch.title !== undefined) input.title = patch.title;
+  if (patch.content !== undefined) input.content = patch.content;
+  if (patch.source !== undefined) input.source = patch.source;
+  if (patch.status !== undefined) input.status = patch.status;
+  if (patch.health !== undefined) input.health = patch.health;
+  if (patch.confidence !== undefined) input.confidence = patch.confidence;
+  return input;
+}
+
+function communityRuleCreateInput(
+  rule: Omit<CommunityRule, "id" | "createdAt" | "updatedAt">
+): CommunityRuleCreateInput {
+  const {
+    projectId: _projectId,
+    ...input
+  } = rule;
+  void _projectId;
+  return input;
+}
+
+function communityRuleUpdateInput(patch: Partial<CommunityRule>): CommunityRuleUpdateInput {
+  const input: CommunityRuleUpdateInput = {};
+  if (patch.communityName !== undefined) input.communityName = patch.communityName;
+  if (patch.platform !== undefined) input.platform = patch.platform;
+  if (patch.topic !== undefined) input.topic = patch.topic;
+  if (patch.allowedContentTypes !== undefined) input.allowedContentTypes = patch.allowedContentTypes;
+  if (patch.selfPromotionPolicy !== undefined) input.selfPromotionPolicy = patch.selfPromotionPolicy;
+  if (patch.linkPolicy !== undefined) input.linkPolicy = patch.linkPolicy;
+  if (patch.vendorParticipationRules !== undefined) input.vendorParticipationRules = patch.vendorParticipationRules;
+  if (patch.disclosureExpectations !== undefined) input.disclosureExpectations = patch.disclosureExpectations;
+  if (patch.tonePreference !== undefined) input.tonePreference = patch.tonePreference;
+  if (patch.riskLevel !== undefined) input.riskLevel = patch.riskLevel;
+  if (patch.moderatorSensitivity !== undefined) input.moderatorSensitivity = patch.moderatorSensitivity;
+  if (patch.productMentionTolerance !== undefined) {
+    input.productMentionTolerance = patch.productMentionTolerance;
+  }
+  if (patch.previousSuccessfulComments !== undefined) {
+    input.previousSuccessfulComments = patch.previousSuccessfulComments;
+  }
+  if (patch.previousRemovals !== undefined) input.previousRemovals = patch.previousRemovals;
+  if (patch.previousNegativeReactions !== undefined) {
+    input.previousNegativeReactions = patch.previousNegativeReactions;
+  }
+  if (patch.recommendedReplyStyle !== undefined) input.recommendedReplyStyle = patch.recommendedReplyStyle;
+  if (patch.minimumAccountAgeOrKarma !== undefined) {
+    input.minimumAccountAgeOrKarma = patch.minimumAccountAgeOrKarma;
+  }
+  if (patch.engagementFrequencyHistory !== undefined) {
+    input.engagementFrequencyHistory = patch.engagementFrequencyHistory;
+  }
+  return input;
+}
 
 function riskFromScores(score: { promotionRiskScore: number; communityRiskScore: number }): Opportunity["riskLevel"] {
   if (score.promotionRiskScore >= 75 || score.communityRiskScore >= 75) return "high";
@@ -155,16 +305,30 @@ function createDraftFromFinalDecision(
   };
 }
 
+function withoutProjectBrain(state: ReydarState): ReydarState {
+  return {
+    ...state,
+    projects: [],
+    productKnowledge: [],
+    marketKnowledge: [],
+    communityRules: []
+  };
+}
+
 function loadState() {
-  if (typeof window === "undefined") return initialState;
+  if (typeof window === "undefined") return withoutProjectBrain(initialState);
 
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (!stored) return initialState;
+    if (!stored) return withoutProjectBrain(initialState);
     const parsed = JSON.parse(stored) as Partial<ReydarState>;
     return {
       ...initialState,
       ...parsed,
+      projects: [],
+      productKnowledge: [],
+      marketKnowledge: [],
+      communityRules: [],
       signalSources: parsed.signalSources ?? initialState.signalSources,
       discoveryRuns: parsed.discoveryRuns ?? initialState.discoveryRuns,
       discoveredItems: parsed.discoveredItems ?? initialState.discoveredItems,
@@ -177,23 +341,70 @@ function loadState() {
       autonomousActionLogs: parsed.autonomousActionLogs ?? initialState.autonomousActionLogs
     } as ReydarState;
   } catch {
-    return initialState;
+    return withoutProjectBrain(initialState);
   }
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<ReydarState>(initialState);
+  const [state, setState] = useState<ReydarState>(() => withoutProjectBrain(initialState));
+  const [localStateLoaded, setLocalStateLoaded] = useState(false);
+  const [projectBrainStatus, setProjectBrainStatus] = useState<ProjectBrainStatus>("loading");
+  const [projectBrainError, setProjectBrainError] = useState<string>();
 
   useEffect(() => {
     setState(loadState());
+    setLocalStateLoaded(true);
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state]);
+    if (!localStateLoaded) return;
+    const localState: Partial<ReydarState> = { ...state };
+    delete localState.projects;
+    delete localState.productKnowledge;
+    delete localState.marketKnowledge;
+    delete localState.communityRules;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(localState));
+  }, [localStateLoaded, state]);
+
+  const retryProjectBrain = useCallback(async () => {
+    setProjectBrainStatus("loading");
+    setProjectBrainError(undefined);
+
+    try {
+      const snapshot = await loadProjectBrain();
+      setState((current) => {
+        const activeProjectId = snapshot.projects.some((project) => project.id === current.activeProjectId)
+          ? current.activeProjectId
+          : (snapshot.projects[0]?.id ?? "");
+        return {
+          ...current,
+          activeProjectId,
+          projects: snapshot.projects,
+          productKnowledge: snapshot.productKnowledge,
+          marketKnowledge: snapshot.marketKnowledge,
+          communityRules: snapshot.communityRules
+        };
+      });
+      setProjectBrainStatus("ready");
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        projects: [],
+        productKnowledge: [],
+        marketKnowledge: [],
+        communityRules: []
+      }));
+      setProjectBrainStatus("error");
+      setProjectBrainError(error instanceof Error ? error.message : "Project Brain could not be loaded.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (localStateLoaded) void retryProjectBrain();
+  }, [localStateLoaded, retryProjectBrain]);
 
   const activeProject = useMemo(
-    () => state.projects.find((project) => project.id === state.activeProjectId) ?? state.projects[0],
+    () => state.projects.find((project) => project.id === state.activeProjectId) ?? state.projects[0] ?? EMPTY_PROJECT,
     [state.activeProjectId, state.projects]
   );
 
@@ -220,102 +431,104 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const createProject = useCallback<StoreContextValue["createProject"]>(
-    (project) => {
-      const created: Project = {
-        ...project,
-        id: makeId("project"),
-        connectedAccount: project.brandAccountName ? `u/${project.brandAccountName}` : "Not connected",
-        status: "active",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+    async (project) => {
+      const created = await createProjectRecord(projectCreateInput(project));
       setState((current) => ({
         ...current,
         activeProjectId: created.id,
         projects: [created, ...current.projects]
       }));
       appendActivity(`Created project ${created.name}.`, created.id, "Project", created.id);
+      return created;
     },
     [appendActivity]
   );
 
-  const updateProject = useCallback<StoreContextValue["updateProject"]>((projectId, patch) => {
+  const updateProject = useCallback<StoreContextValue["updateProject"]>(async (projectId, patch) => {
+    const updated = await updateProjectRecord(projectId, projectUpdateInput(patch));
     setState((current) => ({
       ...current,
-      projects: current.projects.map((project) =>
-        project.id === projectId ? { ...project, ...patch, updatedAt: new Date().toISOString() } : project
-      )
+      projects: current.projects.map((project) => (project.id === projectId ? updated : project))
     }));
+    return updated;
   }, []);
 
   const archiveProject = useCallback<StoreContextValue["archiveProject"]>(
-    (projectId) => {
-      updateProject(projectId, { status: "archived" });
+    async (projectId) => {
+      const updated = await updateProject(projectId, { status: "archived" });
       appendActivity("Archived project.", projectId, "Project", projectId);
+      return updated;
     },
     [appendActivity, updateProject]
   );
 
   const addProductKnowledge = useCallback<StoreContextValue["addProductKnowledge"]>(
-    (item) => {
-      const created: KnowledgeItem = {
-        ...item,
-        id: makeId("pk"),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+    async (item) => {
+      const created = await createKnowledgeRecord("product", item.projectId, knowledgeCreateInput(item));
       setState((current) => ({ ...current, productKnowledge: [created, ...current.productKnowledge] }));
       appendActivity(`Added product knowledge: ${created.title}.`, created.projectId, "ProductKnowledgeItem", created.id);
+      return created;
     },
     [appendActivity]
   );
 
   const addMarketKnowledge = useCallback<StoreContextValue["addMarketKnowledge"]>(
-    (item) => {
-      const created: KnowledgeItem = {
-        ...item,
-        id: makeId("mk"),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+    async (item) => {
+      const created = await createKnowledgeRecord("market", item.projectId, knowledgeCreateInput(item));
       setState((current) => ({ ...current, marketKnowledge: [created, ...current.marketKnowledge] }));
       appendActivity(`Added market knowledge: ${created.title}.`, created.projectId, "MarketKnowledgeItem", created.id);
+      return created;
     },
     [appendActivity]
   );
 
-  const updateKnowledge = useCallback<StoreContextValue["updateKnowledge"]>((kind, itemId, patch) => {
-    const key = kind === "product" ? "productKnowledge" : "marketKnowledge";
-    setState((current) => ({
-      ...current,
-      [key]: current[key].map((item) =>
-        item.id === itemId ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item
-      )
-    }));
-  }, []);
+  const updateKnowledge = useCallback<StoreContextValue["updateKnowledge"]>(
+    async (kind, itemId, patch) => {
+      const projectId =
+        (kind === "product" ? state.productKnowledge : state.marketKnowledge).find(
+          (item) => item.id === itemId
+        )?.projectId ?? "";
+      if (!projectId) throw new Error("The knowledge item is not available in the active workspace.");
+
+      const updated = await updateKnowledgeRecord(kind, projectId, itemId, knowledgeUpdateInput(patch));
+      const key = kind === "product" ? "productKnowledge" : "marketKnowledge";
+      setState((current) => ({
+        ...current,
+        [key]: current[key].map((item) => (item.id === itemId ? updated : item))
+      }));
+      return updated;
+    },
+    [state.marketKnowledge, state.productKnowledge]
+  );
 
   const addCommunityRule = useCallback<StoreContextValue["addCommunityRule"]>(
-    (rule) => {
-      const created: CommunityRule = {
-        ...rule,
-        id: makeId("cr"),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+    async (rule) => {
+      const created = await createCommunityRuleRecord(rule.projectId, communityRuleCreateInput(rule));
       setState((current) => ({ ...current, communityRules: [created, ...current.communityRules] }));
       appendActivity(`Added community rule for ${created.communityName}.`, created.projectId, "CommunityRule", created.id);
+      return created;
     },
     [appendActivity]
   );
 
-  const updateCommunityRule = useCallback<StoreContextValue["updateCommunityRule"]>((ruleId, patch) => {
-    setState((current) => ({
-      ...current,
-      communityRules: current.communityRules.map((rule) =>
-        rule.id === ruleId ? { ...rule, ...patch, updatedAt: new Date().toISOString() } : rule
-      )
-    }));
-  }, []);
+  const updateCommunityRule = useCallback<StoreContextValue["updateCommunityRule"]>(
+    async (ruleId, patch) => {
+      const projectId = state.communityRules.find((rule) => rule.id === ruleId)?.projectId ?? "";
+      if (!projectId) throw new Error("The community rule is not available in the active workspace.");
+
+      const updated = await updateCommunityRuleRecord(
+        projectId,
+        ruleId,
+        communityRuleUpdateInput(patch)
+      );
+      setState((current) => ({
+        ...current,
+        communityRules: current.communityRules.map((rule) => (rule.id === ruleId ? updated : rule))
+      }));
+      return updated;
+    },
+    [state.communityRules]
+  );
 
   const createSignalSource = useCallback<StoreContextValue["createSignalSource"]>(
     (source) => {
@@ -729,13 +942,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const resetDemoData = useCallback(() => {
     window.localStorage.removeItem(STORAGE_KEY);
-    setState(initialState);
+    setState((current) => ({
+      ...initialState,
+      activeProjectId: current.activeProjectId,
+      projects: current.projects,
+      productKnowledge: current.productKnowledge,
+      marketKnowledge: current.marketKnowledge,
+      communityRules: current.communityRules
+    }));
   }, []);
 
   const value = useMemo<StoreContextValue>(
     () => ({
       state,
       activeProject,
+      projectBrainStatus,
+      projectBrainError,
+      retryProjectBrain,
       setActiveProjectId,
       createProject,
       updateProject,
@@ -772,6 +995,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       createProject,
       logOutcome,
       resetDemoData,
+      retryProjectBrain,
       runDeliberationForCandidate,
       runSignalDiscovery,
       saveInsight,
@@ -780,6 +1004,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       updateAutonomyPolicy,
       updateCandidateStatus,
       state,
+      projectBrainError,
+      projectBrainStatus,
       updateCommunityRule,
       updateDraft,
       updateKnowledge,

@@ -5,11 +5,11 @@ import Banner from "@atlaskit/banner";
 import Button, { LoadingButton } from "@atlaskit/button";
 import DynamicTable from "@atlaskit/dynamic-table";
 import EmptyState from "@atlaskit/empty-state";
-import Modal, { ModalBody, ModalFooter, ModalHeader, ModalTitle, ModalTransition } from "@atlaskit/modal-dialog";
 import Select from "@/components/apple-select";
 import TextArea from "@atlaskit/textarea";
 import Textfield from "@atlaskit/textfield";
 import { Box, Inline, Stack } from "@atlaskit/primitives";
+import { AppDialog } from "@/components/app-dialog";
 import { Field } from "@/components/field";
 import { PageHeading } from "@/components/page-heading";
 import { SectionPanel } from "@/components/section-panel";
@@ -43,6 +43,7 @@ export function SignalDiscoveryScreen() {
   const sources = state.signalSources.filter((source) => source.projectId === activeProject.id);
   const runs = state.discoveryRuns.filter((run) => run.projectId === activeProject.id);
   const sourceOptions = sources.map((source) => ({ label: `${source.communityName} (${source.platform})`, value: source.id }));
+
   const runRows = useMemo(
     () =>
       runs.map((run) => {
@@ -185,13 +186,21 @@ export function SignalDiscoveryScreen() {
         </SectionPanel>
       </Box>
 
-      <ModalTransition>
-        {isOpen ? (
-          <Modal onClose={() => setIsOpen(false)} width="large">
-            <form onSubmit={submitSource}>
-              <ModalHeader><ModalTitle>Add signal source</ModalTitle></ModalHeader>
-              <ModalBody>
-                <Stack space="space.200">
+      {isOpen ? (
+        <AppDialog
+          footer={
+            <>
+              <Button type="button" appearance="subtle" onClick={() => setIsOpen(false)}>Cancel</Button>
+              <Button appearance="primary" type="submit">Create source</Button>
+            </>
+          }
+          onClose={() => setIsOpen(false)}
+          onSubmit={submitSource}
+          testId="add-signal-source-dialog"
+          title="Add signal source"
+          width="large"
+        >
+          <Stack space="space.200">
                   <Inline space="space.200" shouldWrap>
                     <div className="form-field">
                       <Field label="Platform">
@@ -262,16 +271,9 @@ export function SignalDiscoveryScreen() {
                       </Field>
                     </div>
                   </Inline>
-                </Stack>
-              </ModalBody>
-              <ModalFooter>
-                <Button appearance="subtle" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button appearance="primary" type="submit">Create source</Button>
-              </ModalFooter>
-            </form>
-          </Modal>
-        ) : null}
-      </ModalTransition>
+          </Stack>
+        </AppDialog>
+      ) : null}
     </>
   );
 }

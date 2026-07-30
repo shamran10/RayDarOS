@@ -16,7 +16,9 @@ export function ProjectSwitcher() {
           id="project-switcher"
           value={activeProject.id}
           onChange={(event) => setActiveProjectId(event.currentTarget.value)}
+          disabled={!options.length}
         >
+          {!options.length ? <option value="">No projects</option> : null}
           {options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
