@@ -1,26 +1,22 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import Link from "next/link";
 import Button, { ButtonGroup } from "@atlaskit/button";
 import DropdownMenu, { DropdownItem, DropdownItemGroup } from "@atlaskit/dropdown-menu";
 import DynamicTable from "@atlaskit/dynamic-table";
 import EmptyState from "@atlaskit/empty-state";
-import Modal, {
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  ModalTitle,
-  ModalTransition
-} from "@atlaskit/modal-dialog";
+import SectionMessage from "@atlaskit/section-message";
 import Select from "@/components/apple-select";
 import TextArea from "@atlaskit/textarea";
 import Textfield from "@atlaskit/textfield";
 import AddIcon from "@atlaskit/icon/core/add";
 import { Box, Grid, Inline, Stack } from "@atlaskit/primitives";
+import { AppDialog } from "@/components/app-dialog";
 import { Field } from "@/components/field";
 import { PageHeading } from "@/components/page-heading";
+import { ProjectBrainLoadState } from "@/components/project-brain-load-state";
 import { SectionPanel } from "@/components/section-panel";
 import { HealthLozenge, RiskLozenge } from "@/components/status-lozenge";
 import { useReydar } from "@/lib/store";
@@ -111,31 +107,57 @@ function ProjectDisplayProfile({ project }: { project: Project }) {
 function ProjectModal({ onClose, project }: { onClose: () => void; project?: Project }) {
   const { createProject, updateProject } = useReydar();
   const [form, setForm] = useState(project ?? defaultForm);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string>();
   const isEditing = Boolean(project);
 
   const update = (key: keyof typeof defaultForm, value: string) => {
     setForm((current) => ({ ...current, [key]: value }));
   };
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (isEditing && project) {
-      updateProject(project.id, form);
-    } else {
-      createProject(form);
+    setIsSubmitting(true);
+    setError(undefined);
+    try {
+      if (isEditing && project) {
+        await updateProject(project.id, form);
+      } else {
+        await createProject(form);
+      }
+      onClose();
+    } catch (submissionError) {
+      setError(submissionError instanceof Error ? submissionError.message : "The project could not be saved.");
+    } finally {
+      setIsSubmitting(false);
     }
-    onClose();
   };
 
   return (
-    <Modal onClose={onClose} width="x-large">
-      <form onSubmit={submit}>
-        <ModalHeader>
-          <ModalTitle>{isEditing ? "Edit project" : "Create project"}</ModalTitle>
-        </ModalHeader>
-        <ModalBody>
-          <Stack space="space.200">
-            <Grid gap="space.200" templateColumns="repeat(auto-fit, minmax(260px, 1fr))">
+    <AppDialog
+      footer={
+        <>
+          <Button type="button" appearance="subtle" onClick={onClose} isDisabled={isSubmitting}>
+            Cancel
+          </Button>
+          <Button appearance="primary" type="submit" isDisabled={isSubmitting}>
+            {isSubmitting ? "Saving…" : isEditing ? "Save changes" : "Create project"}
+          </Button>
+        </>
+      }
+      onClose={onClose}
+      onSubmit={submit}
+      testId="modal-dialog"
+      title={isEditing ? "Edit project" : "Create project"}
+      width="x-large"
+    >
+      <Stack space="space.200">
+        {error ? (
+          <SectionMessage appearance="error" title="Project was not saved">
+            <p>{error}</p>
+          </SectionMessage>
+        ) : null}
+        <Grid gap="space.200" templateColumns="repeat(auto-fit, minmax(260px, 1fr))">
               <Field label="Project name" htmlFor="project-name">
                 <Textfield id="project-name" value={form.name} onChange={(event) => update("name", event.currentTarget.value)} isRequired />
               </Field>
@@ -163,8 +185,8 @@ function ProjectModal({ onClose, project }: { onClose: () => void; project?: Pro
                   onChange={(option) => update("riskTolerance", String(option?.value ?? "medium"))}
                 />
               </Field>
-            </Grid>
-            <Field label="Product description" htmlFor="product-description">
+        </Grid>
+        <Field label="Product description" htmlFor="product-description">
               <TextArea
                 id="product-description"
                 value={form.productDescription}
@@ -203,26 +225,41 @@ function ProjectModal({ onClose, project }: { onClose: () => void; project?: Pro
                 onChange={(event) => update("productMentionPolicy", event.currentTarget.value)}
                 minimumRows={3}
               />
-            </Field>
-          </Stack>
-        </ModalBody>
-        <ModalFooter>
-          <Button appearance="subtle" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button appearance="primary" type="submit">
-            {isEditing ? "Save changes" : "Create project"}
-          </Button>
-        </ModalFooter>
-      </form>
-    </Modal>
+        </Field>
+      </Stack>
+    </AppDialog>
   );
 }
 
 export function ProjectsScreen() {
-  const { state, archiveProject } = useReydar();
+  const {
+    state,
+    archiveProject,
+    projectBrainStatus,
+    projectBrainError,
+    retryProjectBrain
+  } = useReydar();
   const [isCreating, setIsCreating] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | undefined>();
+  const [operationError, setOperationError] = useState<string>();
+  const activeProjectModal = isCreating ? (
+    <ProjectModal key="create-project-modal" onClose={() => setIsCreating(false)} />
+  ) : editingProject ? (
+    <ProjectModal
+      key={`edit-project-modal-${editingProject.id}`}
+      project={editingProject}
+      onClose={() => setEditingProject(undefined)}
+    />
+  ) : null;
+
+  const archive = useCallback(async (projectId: string) => {
+    setOperationError(undefined);
+    try {
+      await archiveProject(projectId);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "The project could not be archived.");
+    }
+  }, [archiveProject]);
 
   const projectRows = useMemo(
     () =>
@@ -260,8 +297,15 @@ export function ProjectsScreen() {
                 <DropdownMenu trigger="Actions" spacing="compact">
                   <DropdownItemGroup>
                     <DropdownItem href={`/projects/${project.id}`}>Open project</DropdownItem>
-                    <DropdownItem onClick={() => setEditingProject(project)}>Edit project</DropdownItem>
-                    <DropdownItem onClick={() => archiveProject(project.id)} isDisabled={project.status === "archived"}>
+                    <DropdownItem
+                      onClick={() => {
+                        setIsCreating(false);
+                        setEditingProject(project);
+                      }}
+                    >
+                      Edit project
+                    </DropdownItem>
+                    <DropdownItem onClick={() => void archive(project.id)} isDisabled={project.status === "archived"}>
                       Archive project
                     </DropdownItem>
                   </DropdownItemGroup>
@@ -271,7 +315,7 @@ export function ProjectsScreen() {
           ]
         };
       }),
-    [archiveProject, state.communityRules, state.marketKnowledge, state.opportunities, state.productKnowledge, state.projects]
+    [archive, state.communityRules, state.marketKnowledge, state.opportunities, state.productKnowledge, state.projects]
   );
 
   return (
@@ -281,17 +325,37 @@ export function ProjectsScreen() {
         description="Create and manage monitored product, service, campaign, or brand workspaces."
         breadcrumbs={[{ text: "ReydarOS", href: "/" }, { text: "Projects", href: "/projects" }]}
         action={
-          <Button appearance="primary" iconBefore={<AddIcon label="" />} onClick={() => setIsCreating(true)}>
+          <Button
+            appearance="primary"
+            iconBefore={<AddIcon label="" />}
+            onClick={() => {
+              setEditingProject(undefined);
+              setIsCreating(true);
+            }}
+          >
             Create project
           </Button>
         }
       />
 
+      <Box paddingBlockEnd="space.200">
+        <ProjectBrainLoadState
+          status={projectBrainStatus}
+          error={projectBrainError}
+          retry={retryProjectBrain}
+        />
+        {operationError ? (
+          <SectionMessage appearance="error" title="Project update failed">
+            <p>{operationError}</p>
+          </SectionMessage>
+        ) : null}
+      </Box>
+
       <SectionPanel
         title="Project workspaces"
         description="Each project has its own Project Brain, knowledge, rules, opportunities, and memory."
       >
-        {state.projects.length ? (
+        {projectBrainStatus === "ready" && state.projects.length ? (
           <DynamicTable
             head={{
               cells: [
@@ -310,19 +374,25 @@ export function ProjectsScreen() {
             rows={projectRows}
             rowsPerPage={8}
           />
-        ) : (
+        ) : projectBrainStatus === "ready" ? (
           <EmptyState
             header="No projects yet"
             description="Create a project to start building a Project Brain."
             primaryAction={
               <ButtonGroup>
-                <Button appearance="primary" onClick={() => setIsCreating(true)}>
+                <Button
+                  appearance="primary"
+                  onClick={() => {
+                    setEditingProject(undefined);
+                    setIsCreating(true);
+                  }}
+                >
                   Create project
                 </Button>
               </ButtonGroup>
             }
           />
-        )}
+        ) : null}
       </SectionPanel>
 
       <Box paddingBlockStart="space.200">
@@ -344,10 +414,7 @@ export function ProjectsScreen() {
         </div>
       </Box>
 
-      <ModalTransition>
-        {isCreating ? <ProjectModal onClose={() => setIsCreating(false)} /> : null}
-        {editingProject ? <ProjectModal project={editingProject} onClose={() => setEditingProject(undefined)} /> : null}
-      </ModalTransition>
+      {activeProjectModal}
     </>
   );
 }

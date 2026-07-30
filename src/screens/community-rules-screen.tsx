@@ -7,15 +7,17 @@ import DropdownMenu, { DropdownItem, DropdownItemGroup } from "@atlaskit/dropdow
 import DynamicTable from "@atlaskit/dynamic-table";
 import EmptyState from "@atlaskit/empty-state";
 import InlineEdit from "@atlaskit/inline-edit";
-import Modal, { ModalBody, ModalFooter, ModalHeader, ModalTitle, ModalTransition } from "@atlaskit/modal-dialog";
 import Select from "@/components/apple-select";
+import SectionMessage from "@atlaskit/section-message";
 import TextArea from "@atlaskit/textarea";
 import Textfield from "@atlaskit/textfield";
 import Tooltip from "@atlaskit/tooltip";
 import AddIcon from "@atlaskit/icon/core/add";
 import { Box, Inline, Stack } from "@atlaskit/primitives";
+import { AppDialog } from "@/components/app-dialog";
 import { Field } from "@/components/field";
 import { PageHeading } from "@/components/page-heading";
+import { ProjectBrainLoadState } from "@/components/project-brain-load-state";
 import { SectionPanel } from "@/components/section-panel";
 import { RiskLozenge } from "@/components/status-lozenge";
 import { useReydar } from "@/lib/store";
@@ -44,6 +46,8 @@ function RuleModal({
   onClose: () => void;
 }) {
   const { addCommunityRule, updateCommunityRule } = useReydar();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string>();
   const [form, setForm] = useState<Omit<CommunityRule, "id" | "createdAt" | "updatedAt">>({
     projectId,
     communityName: rule?.communityName ?? "",
@@ -70,22 +74,53 @@ function RuleModal({
     setForm((current) => ({ ...current, [key]: value }));
   };
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (rule) updateCommunityRule(rule.id, form);
-    else addCommunityRule(form);
-    onClose();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    setError(undefined);
+    try {
+      if (rule) await updateCommunityRule(rule.id, form);
+      else await addCommunityRule(form);
+      onClose();
+    } catch (submissionError) {
+      setError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : "The community rule could not be saved."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const close = () => {
+    if (!isSubmitting) onClose();
   };
 
   return (
-    <Modal onClose={onClose} width="x-large">
-      <form onSubmit={submit}>
-        <ModalHeader>
-          <ModalTitle>{rule ? "Edit community rule" : "Add community rule"}</ModalTitle>
-        </ModalHeader>
-        <ModalBody>
-          <Stack space="space.200">
-            <Inline space="space.200" shouldWrap>
+    <AppDialog
+      footer={
+        <>
+          <Button type="button" appearance="subtle" onClick={close} isDisabled={isSubmitting}>Cancel</Button>
+          <Button appearance="primary" type="submit" isDisabled={isSubmitting}>
+            {isSubmitting ? "Saving…" : rule ? "Save rule" : "Add rule"}
+          </Button>
+        </>
+      }
+      onClose={close}
+      onSubmit={submit}
+      testId={rule ? `edit-community-rule-dialog-${rule.id}` : "add-community-rule-dialog"}
+      title={rule ? "Edit community rule" : "Add community rule"}
+      width="x-large"
+    >
+      <Stack space="space.200">
+        {error ? (
+          <SectionMessage appearance="error" title="Community rule was not saved">
+            <p>{error}</p>
+          </SectionMessage>
+        ) : null}
+        <Inline space="space.200" shouldWrap>
               <div className="form-field">
                 <Field label="Community name" htmlFor="community-name">
                   <Textfield id="community-name" value={form.communityName} onChange={(event) => update("communityName", event.currentTarget.value)} isRequired />
@@ -105,11 +140,11 @@ function RuleModal({
                   />
                 </Field>
               </div>
-            </Inline>
-            <Field label="Topic" htmlFor="topic">
-              <Textfield id="topic" value={form.topic} onChange={(event) => update("topic", event.currentTarget.value)} />
-            </Field>
-            <Inline space="space.200" shouldWrap>
+        </Inline>
+        <Field label="Topic" htmlFor="topic">
+          <Textfield id="topic" value={form.topic} onChange={(event) => update("topic", event.currentTarget.value)} />
+        </Field>
+        <Inline space="space.200" shouldWrap>
               <div className="form-field">
                 <Field label="Product mention tolerance">
                   <Select
@@ -133,47 +168,82 @@ function RuleModal({
                   <Textfield id="tone-preference" value={form.tonePreference} onChange={(event) => update("tonePreference", event.currentTarget.value)} />
                 </Field>
               </div>
-            </Inline>
-            {[
-              ["Allowed content types", "allowedContentTypes"],
-              ["Self-promotion policy", "selfPromotionPolicy"],
-              ["Link policy", "linkPolicy"],
-              ["Vendor participation rules", "vendorParticipationRules"],
-              ["Disclosure expectations", "disclosureExpectations"],
-              ["Recommended reply style", "recommendedReplyStyle"],
-              ["Previous successful comments", "previousSuccessfulComments"],
-              ["Previous removals", "previousRemovals"],
-              ["Previous negative reactions", "previousNegativeReactions"],
-              ["Minimum account age or karma rules", "minimumAccountAgeOrKarma"],
-              ["Engagement frequency history", "engagementFrequencyHistory"]
-            ].map(([label, key]) => (
-              <Field key={key} label={label} htmlFor={key}>
-                <TextArea
-                  id={key}
-                  value={String(form[key as keyof typeof form] ?? "")}
-                  onChange={(event) => update(key as keyof typeof form, event.currentTarget.value as never)}
-                  minimumRows={2}
-                />
-              </Field>
-            ))}
-          </Stack>
-        </ModalBody>
-        <ModalFooter>
-          <Button appearance="subtle" onClick={onClose}>Cancel</Button>
-          <Button appearance="primary" type="submit">{rule ? "Save rule" : "Add rule"}</Button>
-        </ModalFooter>
-      </form>
-    </Modal>
+        </Inline>
+        {[
+          ["Allowed content types", "allowedContentTypes"],
+          ["Self-promotion policy", "selfPromotionPolicy"],
+          ["Link policy", "linkPolicy"],
+          ["Vendor participation rules", "vendorParticipationRules"],
+          ["Disclosure expectations", "disclosureExpectations"],
+          ["Recommended reply style", "recommendedReplyStyle"],
+          ["Previous successful comments", "previousSuccessfulComments"],
+          ["Previous removals", "previousRemovals"],
+          ["Previous negative reactions", "previousNegativeReactions"],
+          ["Minimum account age or karma rules", "minimumAccountAgeOrKarma"],
+          ["Engagement frequency history", "engagementFrequencyHistory"]
+        ].map(([label, key]) => (
+          <Field key={key} label={label} htmlFor={key}>
+            <TextArea
+              id={key}
+              value={String(form[key as keyof typeof form] ?? "")}
+              onChange={(event) => update(key as keyof typeof form, event.currentTarget.value as never)}
+              minimumRows={2}
+            />
+          </Field>
+        ))}
+      </Stack>
+    </AppDialog>
   );
 }
 
 export function CommunityRulesScreen({ projectId }: { projectId: string }) {
-  const { state, updateCommunityRule } = useReydar();
+  const {
+    state,
+    updateCommunityRule,
+    projectBrainStatus,
+    projectBrainError,
+    retryProjectBrain
+  } = useReydar();
   const [isAdding, setIsAdding] = useState(false);
   const [editing, setEditing] = useState<CommunityRule | undefined>();
+  const [operationError, setOperationError] = useState<string>();
+  const activeRuleModal = isAdding ? (
+    <RuleModal
+      key="add-community-rule-modal"
+      projectId={projectId}
+      onClose={() => setIsAdding(false)}
+    />
+  ) : editing ? (
+    <RuleModal
+      key={`edit-community-rule-modal-${editing.id}`}
+      projectId={projectId}
+      rule={editing}
+      onClose={() => setEditing(undefined)}
+    />
+  ) : null;
   const project = state.projects.find((item) => item.id === projectId);
   const rules = state.communityRules.filter((rule) => rule.projectId === projectId);
   const blockedRules = rules.filter((rule) => rule.riskLevel === "blocked");
+
+  const updateRule = async (ruleId: string, patch: Partial<CommunityRule>) => {
+    setOperationError(undefined);
+    try {
+      await updateCommunityRule(ruleId, patch);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "The community rule could not be updated.");
+      throw error;
+    }
+  };
+
+  if (projectBrainStatus === "ready" && !project) {
+    return (
+      <EmptyState
+        header="Project not found"
+        description="This project is not available in the database-backed workspace."
+        primaryAction={<Button href="/projects">Back to projects</Button>}
+      />
+    );
+  }
 
   return (
     <>
@@ -186,11 +256,31 @@ export function CommunityRulesScreen({ projectId }: { projectId: string }) {
           { text: "Community Rules", href: `/projects/${projectId}/community-rules` }
         ]}
         action={
-          <Button appearance="primary" iconBefore={<AddIcon label="" />} onClick={() => setIsAdding(true)}>
+          <Button
+            appearance="primary"
+            iconBefore={<AddIcon label="" />}
+            onClick={() => {
+              setEditing(undefined);
+              setIsAdding(true);
+            }}
+          >
             Add community
           </Button>
         }
       />
+
+      <Box paddingBlockEnd="space.200">
+        <ProjectBrainLoadState
+          status={projectBrainStatus}
+          error={projectBrainError}
+          retry={retryProjectBrain}
+        />
+        {operationError ? (
+          <SectionMessage appearance="error" title="Community rule update failed">
+            <p>{operationError}</p>
+          </SectionMessage>
+        ) : null}
+      </Box>
 
       {blockedRules.length ? (
         <Box paddingBlockEnd="space.200">
@@ -201,7 +291,7 @@ export function CommunityRulesScreen({ projectId }: { projectId: string }) {
       ) : null}
 
       <SectionPanel title="Community rules" description="Rules are used by DARM to lower mention levels, require disclosure, avoid links, or block recommendations.">
-        {rules.length ? (
+        {projectBrainStatus === "ready" && rules.length ? (
           <DynamicTable
             head={{
               cells: [
@@ -228,7 +318,7 @@ export function CommunityRulesScreen({ projectId }: { projectId: string }) {
                       label={`Edit ${rule.communityName}`}
                       editView={({ errorMessage, ...fieldProps }) => <Textfield {...fieldProps} autoFocus />}
                       readView={() => <strong>{rule.communityName}</strong>}
-                      onConfirm={(value) => updateCommunityRule(rule.id, { communityName: value })}
+                      onConfirm={(value) => updateRule(rule.id, { communityName: value })}
                     />
                   )
                 },
@@ -243,36 +333,53 @@ export function CommunityRulesScreen({ projectId }: { projectId: string }) {
                 {
                   key: "actions",
                   content: (
-                    <DropdownMenu trigger="Actions" spacing="compact">
-                      <DropdownItemGroup>
-                        <DropdownItem onClick={() => setEditing(rule)}>Edit rule</DropdownItem>
-                        <DropdownItem onClick={() => updateCommunityRule(rule.id, { riskLevel: "blocked" })}>
-                          Mark blocked
-                        </DropdownItem>
-                        <DropdownItem onClick={() => updateCommunityRule(rule.id, { riskLevel: "low" })}>
-                          Mark low risk
-                        </DropdownItem>
-                      </DropdownItemGroup>
-                    </DropdownMenu>
+                    <Inline space="space.050">
+                      <Button
+                        spacing="compact"
+                        onClick={() => {
+                          setIsAdding(false);
+                          setEditing(rule);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <DropdownMenu trigger="Actions" spacing="compact">
+                        <DropdownItemGroup>
+                          <DropdownItem onClick={() => void updateRule(rule.id, { riskLevel: "blocked" }).catch(() => undefined)}>
+                            Mark blocked
+                          </DropdownItem>
+                          <DropdownItem onClick={() => void updateRule(rule.id, { riskLevel: "low" }).catch(() => undefined)}>
+                            Mark low risk
+                          </DropdownItem>
+                        </DropdownItemGroup>
+                      </DropdownMenu>
+                    </Inline>
                   )
                 }
               ]
             }))}
             rowsPerPage={8}
           />
-        ) : (
+        ) : projectBrainStatus === "ready" ? (
           <EmptyState
             header="No community rules defined"
             description="Add rules before generating product mentions. Blocked communities will prevent posting recommendations."
-            primaryAction={<Button appearance="primary" onClick={() => setIsAdding(true)}>Add community rule</Button>}
+            primaryAction={
+              <Button
+                appearance="primary"
+                onClick={() => {
+                  setEditing(undefined);
+                  setIsAdding(true);
+                }}
+              >
+                Add community rule
+              </Button>
+            }
           />
-        )}
+        ) : null}
       </SectionPanel>
 
-      <ModalTransition>
-        {isAdding ? <RuleModal projectId={projectId} onClose={() => setIsAdding(false)} /> : null}
-        {editing ? <RuleModal projectId={projectId} rule={editing} onClose={() => setEditing(undefined)} /> : null}
-      </ModalTransition>
+      {activeRuleModal}
     </>
   );
 }

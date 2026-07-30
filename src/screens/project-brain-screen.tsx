@@ -13,6 +13,7 @@ import WarningIcon from "@atlaskit/icon/core/warning";
 import { Box } from "@atlaskit/primitives";
 import type { ReactNode } from "react";
 import { PageHeading } from "@/components/page-heading";
+import { ProjectBrainLoadState } from "@/components/project-brain-load-state";
 import { HealthLozenge, RiskLozenge } from "@/components/status-lozenge";
 import { useReydar } from "@/lib/store";
 import { projectHealth, strongestRisk } from "@/lib/selectors";
@@ -48,14 +49,29 @@ function ProjectBrainRow({
 }
 
 export function ProjectBrainScreen({ projectId }: { projectId: string }) {
-  const { state } = useReydar();
+  const {
+    state,
+    projectBrainStatus,
+    projectBrainError,
+    retryProjectBrain
+  } = useReydar();
   const project = state.projects.find((item) => item.id === projectId);
+
+  if (projectBrainStatus !== "ready") {
+    return (
+      <ProjectBrainLoadState
+        status={projectBrainStatus}
+        error={projectBrainError}
+        retry={retryProjectBrain}
+      />
+    );
+  }
 
   if (!project) {
     return (
       <EmptyState
         header="Project not found"
-        description="The selected Project Brain could not be found in the local workspace."
+        description="The selected Project Brain could not be found in the database-backed workspace."
         primaryAction={<Button href="/projects">Back to projects</Button>}
       />
     );

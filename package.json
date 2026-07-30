@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
@@ -42,8 +43,8 @@
     "@atlaskit/textfield": "latest",
     "@atlaskit/tokens": "latest",
     "@atlaskit/tooltip": "latest",
-    "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "latest",
+    "@prisma/adapter-pg": "7.9.0",
+    "@prisma/client": "7.9.0",
     "dotenv": "^17.4.2",
     "next": "^14.2.30",
     "next-auth": "^4.24.11",
@@ -60,7 +61,7 @@
     "@types/react-dom": "^18.3.7",
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.30",
-    "prisma": "latest",
+    "prisma": "7.9.0",
     "tsx": "latest",
     "typescript": "^5.8.3"
   },

@@ -34,6 +34,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     (opportunity) => opportunity.scores.intentScore >= 75 && opportunity.riskLevel !== "high"
   ).length;
   const activeProjectOpportunities = state.opportunities.filter((item) => item.projectId === activeProject.id).length;
+  const activeProjectHref = activeProject.id ? `/projects/${activeProject.id}` : "/projects";
   const mobilePrimaryItems = navItems.filter((item) => primaryMobileHrefs.has(item.href));
   const mobileSecondaryItems = navItems.filter((item) => !primaryMobileHrefs.has(item.href));
 
@@ -72,7 +73,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
 
-          <Link className="active-project-card" href={`/projects/${activeProject.id}`}>
+          <Link className="active-project-card" href={activeProjectHref}>
             <span className="active-project-icon" aria-hidden="true">
               <TargetIcon label="" />
             </span>
@@ -94,7 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <span>DARM command center</span>
               </span>
             </Link>
-            <Link className="mobile-active-project" href={`/projects/${activeProject.id}`}>
+            <Link className="mobile-active-project" href={activeProjectHref}>
               <TargetIcon label="" />
               <span>{activeProject.name}</span>
             </Link>

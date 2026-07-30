@@ -24,9 +24,12 @@ import type {
   SourceType
 } from "../src/lib/types";
 
-const adapter = new PrismaPg({
-  connectionString: process.env.DATABASE_URL ?? "postgresql://postgres:postgres@localhost:5432/reydaros?schema=public"
-});
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is required to run the demo seed.");
+}
+
+const adapter = new PrismaPg({ connectionString: databaseUrl });
 
 const prisma = new PrismaClient({ adapter });
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -134,6 +137,15 @@ const guardrailAction = (value: GuardrailAction) =>
     | "LOWER_PRODUCT_MENTION_LEVEL";
 
 async function main() {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("The destructive demo seed is disabled in production.");
+  }
+  if (process.env.ALLOW_DESTRUCTIVE_SEED !== "true") {
+    throw new Error(
+      "The demo seed deletes existing application data. Run it only against a disposable development database with ALLOW_DESTRUCTIVE_SEED=true."
+    );
+  }
+
   await prisma.activityLog.deleteMany();
   await prisma.engagementOutcome.deleteMany();
   await prisma.guardrailCheck.deleteMany();
@@ -150,14 +162,16 @@ async function main() {
   await prisma.opportunityScore.deleteMany();
   await prisma.opportunity.deleteMany();
   await prisma.signalSource.deleteMany();
+  await prisma.autonomyPolicy.deleteMany();
+  await prisma.knowledgeEmbedding.deleteMany();
   await prisma.communityRule.deleteMany();
   await prisma.marketKnowledgeItem.deleteMany();
   await prisma.productKnowledgeItem.deleteMany();
-  await prisma.knowledgeEmbedding.deleteMany();
   await prisma.uploadedDocument.deleteMany();
   await prisma.project.deleteMany();
   await prisma.session.deleteMany();
   await prisma.account.deleteMany();
+  await prisma.verificationToken.deleteMany();
   await prisma.user.deleteMany();
   await prisma.organization.deleteMany();
 
